@@ -1,0 +1,51 @@
+{
+  "version": "1.0.0",
+  "savedAt": "2026-06-14T23:39:30.625Z",
+  "world": {
+    "gameTime": 107,
+    "credits": 1000,
+    "gameSpeed": 10
+  },
+  "crew": {
+    "count": 1
+  },
+  "ship": {
+    "volumeM3": 16
+  },
+  "systems": {
+    "atmosphere": {
+      "o2Pct": 21.000759548611,
+      "co2Pct": 0.03929166666666656
+    },
+    "o2Generator": {
+      "active": false,
+      "count": 1,
+      "tier": 1,
+      "target": 21
+    },
+    "co2Scrubber": {
+      "active": false,
+      "count": 1,
+      "tier": 1,
+      "target": 0.04
+    },
+    "battery": {
+      "currentWh": 104.0236111111109,
+      "capacityWh": 1000,
+      "count": 1,
+      "tier": 1,
+      "target": 80
+    },
+    "generator": {
+      "active": true
+    },
+    "fuel": {
+      "currentL": 9.999705555555504,
+      "capacityL": 100
+    }
+  },
+  "environment": {
+    "inBreathableAtmosphere": true,
+    "ventsOpen": true
+  }
+}

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Starship Operations</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="launch-screen" class="launch-screen">
+        <h1>STARSHIP OPERATIONS</h1>
+        <div class="launch-menu">
+            <button id="new-game-btn">New Game</button>
+            <button id="load-game-btn">Load Game</button>
+            <button id="quit-btn">Quit Game</button>
+        </div>
+    </div>
+
+    <div id="game-container" class="game-container" style="display: none;">
+        <header class="game-header">
+            <h1>Starship Operations Dashboard</h1>
+            <div class="header-right">
+                <div class="game-stats">
+                    <div class="stat">Day <span id="day-counter">1</span></div>
+                    <div class="stat"><span id="timer">00:00</span> ship time</div>
+                    <div class="stat">Credits: <span id="credits">1000</span></div>
+                    <div class="stat">Crew: <span id="crew">1</span></div>
+                </div>
+                <div class="speed-controls">
+                    <span class="speed-label">Speed:</span>
+                    <button class="speed-btn speed-active" id="speed-1x">1&times;</button>
+                    <button class="speed-btn" id="speed-10x">10&times;</button>
+                    <button class="speed-btn" id="speed-100x">100&times;</button>
+                </div>
+                <span id="save-status" class="save-status"></span>
+            </div>
+        </header>
+
+        <main class="game-main">
+            <div class="system-dashboard">
+
+                <!-- Oxygen System Card -->
+                <div class="system-card" id="card-o2">
+                    <div class="card-header">
+                        <h3>Oxygen System</h3>
+                        <span class="status-badge badge-normal" id="o2-status-badge">NOMINAL</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="o2-level">21.00%</span>
+                        <span class="value-label">atmospheric O&#8322;</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track o2-zones">
+                            <div class="gauge-indicator" id="o2-indicator" style="left: 84%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0%</span>
+                            <span style="left:64%">16%</span>
+                            <span style="left:78%">19.5%</span>
+                            <span style="left:84%">21%</span>
+                            <span style="left:100%">25%</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-red">&#9632; &lt;16% Critical</span>
+                        <span class="legend-item legend-amber">&#9632; 16-19.5% Low</span>
+                        <span class="legend-item legend-green">&#9632; 19.5-23.5% Safe</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Crew consumption:</span>
+                            <span class="rate-value rate-neg" id="o2-consumption">&#8722;15.0 L/hr</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Generator output:</span>
+                            <span class="rate-value" id="o2-generation">0.0 L/hr</span>
+                        </div>
+                        <div class="rate-row" id="o2-vent-row" style="display:none">
+                            <span class="rate-label">Vent exchange:</span>
+                            <span class="rate-value rate-pos-good" id="o2-vent">0.0 L/hr</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Net rate:</span>
+                            <span class="rate-value" id="o2-rate">&#8722;15.0 L/hr</span>
+                        </div>
+                    </div>
+                    <div class="projection-panel" id="o2-projections"></div>
+                    <div class="auto-row">
+                        <label class="auto-label" for="o2-target-input">Maintain at:</label>
+                        <input type="number" class="auto-input" id="o2-target-input" min="18" max="25" step="0.5" value="21">
+                        <span class="auto-unit">% atm.</span>
+                    </div>
+                    <div class="system-controls">
+                        <span id="o2-status">Generator: <strong>OFF</strong></span>
+                        <button id="o2-toggle" class="toggle-btn btn-off">Enable Generator</button>
+                    </div>
+                </div>
+
+                <!-- CO2 Scrubber Card -->
+                <div class="system-card" id="card-co2">
+                    <div class="card-header">
+                        <h3>CO&#8322; Scrubber</h3>
+                        <span class="status-badge badge-normal" id="co2-status-badge">NOMINAL</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="co2-level">400 ppm</span>
+                        <span class="value-label">atmospheric CO&#8322;</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track co2-zones">
+                            <div class="gauge-indicator" id="co2-indicator" style="left: 4%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0</span>
+                            <span style="left:10%">1k</span>
+                            <span style="left:50%">5k</span>
+                            <span style="left:100%">10k ppm</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-green">&#9632; &lt;1000 Safe</span>
+                        <span class="legend-item legend-amber">&#9632; 1k-5k Warning</span>
+                        <span class="legend-item legend-red">&#9632; &gt;5k Danger</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Crew production:</span>
+                            <span class="rate-value rate-pos" id="co2-production">+12.0 L/hr</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Scrubber removal:</span>
+                            <span class="rate-value" id="co2-scrubbing">0.0 L/hr</span>
+                        </div>
+                        <div class="rate-row" id="co2-vent-row" style="display:none">
+                            <span class="rate-label">Vent exchange:</span>
+                            <span class="rate-value rate-neg-good" id="co2-vent">0.0 L/hr</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Net rate:</span>
+                            <span class="rate-value" id="co2-rate">+12.0 L/hr</span>
+                        </div>
+                    </div>
+                    <div class="projection-panel" id="co2-projections"></div>
+                    <div class="auto-row">
+                        <label class="auto-label" for="co2-target-input">Maintain at:</label>
+                        <input type="number" class="auto-input" id="co2-target-input" min="300" max="2000" step="50" value="400">
+                        <span class="auto-unit">ppm</span>
+                    </div>
+                    <div class="system-controls">
+                        <span id="co2-status">Scrubber: <strong>OFF</strong></span>
+                        <button id="co2-toggle" class="toggle-btn btn-off">Enable Scrubber</button>
+                    </div>
+                </div>
+
+                <!-- Power System Card -->
+                <div class="system-card" id="card-power">
+                    <div class="card-header">
+                        <h3>Power System</h3>
+                        <span class="status-badge badge-warning" id="power-status-badge">WARNING</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="power-level">10%</span>
+                        <span class="value-label">battery &mdash; <span id="power-wh">100</span> / 1000 Wh</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track resource-zones">
+                            <div class="gauge-indicator" id="power-indicator" style="left: 10%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0%</span>
+                            <span style="left:10%">10%</span>
+                            <span style="left:30%">30%</span>
+                            <span style="left:100%">100%</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-red">&#9632; &lt;10% Critical</span>
+                        <span class="legend-item legend-amber">&#9632; 10-30% Low</span>
+                        <span class="legend-item legend-green">&#9632; &gt;30% Good</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Generator output:</span>
+                            <span class="rate-value rate-pos-good" id="power-gen-output">0 W</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">O&#8322; unit draw:</span>
+                            <span class="rate-value" id="power-o2-draw">0 W</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">CO&#8322; unit draw:</span>
+                            <span class="rate-value" id="power-co2-draw">0 W</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Battery net rate:</span>
+                            <span class="rate-value" id="power-rate">0 Wh/hr</span>
+                        </div>
+                    </div>
+                    <div class="auto-row">
+                        <label class="auto-label" for="power-target-input">Maintain at:</label>
+                        <input type="number" class="auto-input" id="power-target-input" min="10" max="100" step="5" value="80">
+                        <span class="auto-unit">%</span>
+                    </div>
+                    <div class="system-controls">
+                        <span id="power-status">Generator: <strong>OFF</strong></span>
+                        <button id="power-toggle" class="toggle-btn btn-off">Enable Generator</button>
+                    </div>
+                </div>
+
+                <!-- Fuel System Card -->
+                <div class="system-card" id="card-fuel">
+                    <div class="card-header">
+                        <h3>Fuel System</h3>
+                        <span class="status-badge badge-warning" id="fuel-status-badge">WARNING</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="fuel-level">10.00 L</span>
+                        <span class="value-label">of 100 L remaining</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track resource-zones">
+                            <div class="gauge-indicator" id="fuel-indicator" style="left: 10%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0 L</span>
+                            <span style="left:10%">10 L</span>
+                            <span style="left:30%">30 L</span>
+                            <span style="left:100%">100 L</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-red">&#9632; &lt;10 L Critical</span>
+                        <span class="legend-item legend-amber">&#9632; 10-30 L Low</span>
+                        <span class="legend-item legend-green">&#9632; &gt;30 L Good</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Generator consumption:</span>
+                            <span class="rate-value" id="fuel-rate">0.000 L/hr</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Est. generator runtime:</span>
+                            <span class="rate-value" id="fuel-runtime">&mdash;</span>
+                        </div>
+                    </div>
+                    <div class="system-info">
+                        <span id="fuel-status">Consumed by power generator</span>
+                    </div>
+                </div>
+            </div>
+
+                <!-- Environment / Vent Panel -->
+                <div class="environment-panel">
+                    <div class="env-section">
+                        <span class="env-dot breathable" id="atmos-dot"></span>
+                        <span class="env-label" id="atmos-label">BREATHABLE ATMOSPHERE</span>
+                    </div>
+                    <div class="env-divider"></div>
+                    <div class="env-section">
+                        <span class="env-label" id="vent-status-label">Vents: CLOSED</span>
+                        <button id="vent-toggle" class="toggle-btn btn-off">Open Vents</button>
+                    </div>
+                </div>
+        </main>
+
+        <footer class="game-footer">
+            <p>Manage your starship systems to keep your crew alive. &nbsp;|&nbsp; Run <code>node server.js</code> then open <a href="http://localhost:3001" style="color:#546e7a">localhost:3001</a> for save-game support.</p>
+        </footer>
+    </div>
+
+    <div id="pause-menu" class="pause-menu" style="display: none;">
+        <h2>Game Paused</h2>
+        <div class="pause-options">
+            <button id="resume-btn">Resume Game</button>
+            <button id="save-btn">Save Game</button>
+            <button id="export-btn">Export Save File</button>
+            <button id="main-menu-btn">Main Menu</button>
+        </div>
+    </div>
+
+    <script src="game_state.js"></script>
+    <script src="system_update.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
