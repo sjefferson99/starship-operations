@@ -69,25 +69,60 @@ body::before {
 /* ── Header ── */
 .game-header {
     background: linear-gradient(90deg, #081525 0%, #0d2b45 100%);
-    padding: 14px 24px;
+    padding: 12px 24px;
+    border-bottom: 1px solid rgba(0, 150, 255, 0.3);
+}
+.header-top {
     display: flex;
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
-    gap: 10px;
-    border-bottom: 1px solid rgba(0, 150, 255, 0.3);
-}
-.game-header h1 {
-    font-size: 1.4rem;
-    color: #4fc3f7;
-    text-shadow: 0 0 8px rgba(79, 195, 247, 0.5);
-    letter-spacing: 1px;
+    gap: 12px;
 }
 .header-right {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 8px;
+}
+
+/* ── Ship identity panel ── */
+.ship-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.ship-thumb {
+    width: 120px;
+    height: 57px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 6px rgba(79, 195, 247, 0.4));
+    flex-shrink: 0;
+}
+.ship-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.ship-name {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #4fc3f7;
+    letter-spacing: 3px;
+    text-shadow: 0 0 10px rgba(79, 195, 247, 0.6);
+    line-height: 1;
+}
+.ship-class {
+    font-size: 0.72rem;
+    color: #78909c;
+    letter-spacing: 0.5px;
+    font-style: italic;
+}
+.ship-reg {
+    font-size: 0.68rem;
+    color: #546e7a;
+    font-family: monospace;
+    letter-spacing: 1px;
 }
 .game-stats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .stat {
@@ -580,8 +615,137 @@ body::before {
 
 /* ── Responsive ── */
 @media (max-width: 700px) {
-    .game-header { flex-direction: column; text-align: center; }
+    .header-top { flex-direction: column; text-align: center; }
+    .ship-identity { flex-direction: column; }
+    .header-right { align-items: center; }
     .system-dashboard { grid-template-columns: 1fr; }
     .game-controls { flex-direction: column; }
     .game-controls button { width: 100%; }
+    .intro-ship-card { flex-direction: column; }
+    .intro-ship-img { width: 100%; max-width: 340px; }
+}
+
+/* ── Intro / backstory modal ── */
+.intro-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 8, 24, 0.97);
+    z-index: 200;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 40px 20px;
+}
+.intro-content {
+    width: 100%;
+    max-width: 720px;
+    background: linear-gradient(160deg, #080f22 0%, #0d1b38 100%);
+    border: 1px solid rgba(79, 195, 247, 0.25);
+    border-radius: 18px;
+    padding: 44px 48px 40px;
+    box-shadow: 0 0 80px rgba(0, 100, 255, 0.2), 0 40px 80px rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+.intro-header {
+    text-align: center;
+    border-bottom: 1px solid rgba(79, 195, 247, 0.15);
+    padding-bottom: 20px;
+}
+.intro-year {
+    font-size: 0.72rem;
+    letter-spacing: 3px;
+    color: #4a6380;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    font-family: monospace;
+}
+.intro-title {
+    font-size: 1.9rem;
+    letter-spacing: 5px;
+    color: #4fc3f7;
+    text-shadow: 0 0 20px rgba(79, 195, 247, 0.5);
+    font-weight: 300;
+}
+.intro-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    line-height: 1.75;
+    color: #8eadc4;
+    font-size: 0.95rem;
+}
+.intro-lead {
+    font-size: 1.05rem;
+    color: #b0cde0;
+    font-style: italic;
+}
+.intro-finale {
+    color: #a0c4d8;
+    font-weight: 500;
+}
+.intro-tagline {
+    font-size: 1.1rem;
+    color: #4fc3f7;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-align: right;
+    font-style: italic;
+    text-shadow: 0 0 10px rgba(79, 195, 247, 0.4);
+}
+.intro-ship-card {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    background: rgba(0, 30, 60, 0.5);
+    border: 1px solid rgba(79, 195, 247, 0.2);
+    border-radius: 12px;
+    padding: 18px 22px;
+}
+.intro-ship-img {
+    width: 240px;
+    height: 114px;
+    object-fit: contain;
+    flex-shrink: 0;
+    filter: drop-shadow(0 0 10px rgba(79, 195, 247, 0.4));
+}
+.intro-ship-label {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.intro-ship-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #4fc3f7;
+    letter-spacing: 4px;
+    text-shadow: 0 0 12px rgba(79, 195, 247, 0.5);
+}
+.intro-ship-class {
+    font-size: 0.8rem;
+    color: #546e7a;
+    letter-spacing: 0.5px;
+    font-style: italic;
+    line-height: 1.5;
+}
+.intro-continue {
+    align-self: center;
+    padding: 14px 48px;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 3px;
+    color: #0d1b38;
+    background: linear-gradient(90deg, #4fc3f7, #00c6ff);
+    border: none;
+    border-radius: 30px;
+    cursor: pointer;
+    transition: all 0.25s;
+    box-shadow: 0 0 24px rgba(79, 195, 247, 0.4);
+    text-transform: uppercase;
+}
+.intro-continue:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 36px rgba(79, 195, 247, 0.65), 0 8px 20px rgba(0,0,0,0.4);
 }

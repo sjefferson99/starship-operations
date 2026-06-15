@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "classes": [
+    {
+      "id": "vagrant-mk1",
+      "name": "Vagrant Mk.I",
+      "manufacturer": "Pell-Dyne Systems",
+      "type": "light_shuttle",
+      "yearProduced": 2247,
+      "image": "assets/ships/vagrant-mk1.svg",
+      "description": "An ageing light shuttle designed for short-range orbital and inter-system transfers. The Mk.I was the workhorse of Pell-Dyne's budget cargo line, produced in the tens of thousands through the 2240s and 2250s. Considered outdated even during production, the design prioritises repairability over performance — nearly every component can be replaced with standard parts. When Pell-Dyne collapsed during the Great Contraction, thousands of decommissioned Mk.Is flooded salvage markets across the outer systems. Most are still flying.",
+      "lore": "Fleet engineers nicknamed the Mk.I the 'Vagrant' before Pell-Dyne officially adopted the name. The O2 generator's characteristic three-beat rattle before failure is so well-known it has its own entry in the mechanics' slang dictionary.",
+      "specs": {
+        "lengthM": 14,
+        "beamM": 7,
+        "heightM": 4,
+        "massKg": 9200,
+        "crewMin": 1,
+        "crewMax": 3,
+        "cargoCapacityM3": 15,
+        "cargoCapacityKg": 4000,
+        "hullRating": "D",
+        "driveClass": "fusion-ion",
+        "rangeLY": 0.5,
+        "atmCapable": true
+      },
+      "defaultSystems": {
+        "volumeM3": 16,
+        "o2Generator": { "count": 1, "tier": 1 },
+        "co2Scrubber": { "count": 1, "tier": 1 },
+        "battery": { "capacityWh": 1000, "count": 1, "tier": 1 },
+        "fuelTank": { "capacityL": 100 }
+      }
+    }
+  ]
+}

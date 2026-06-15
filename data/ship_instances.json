@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "ships": [
+    {
+      "id": "player-ship-1",
+      "classId": "vagrant-mk1",
+      "name": "Stray Light",
+      "ownerId": "player",
+      "registration": "PDR-4471-K",
+      "condition": "poor",
+      "history": "Purchased for 850 credits from Harlow's Salvage, Port Carrow, Kel Veth III. Previous registration to one J. Harwick, last known address: Bay 9 transient berths. Transfer paperwork was never filed. Heat shield patch on port ventral is original Pell-Dyne adhesive from 2251.",
+      "systemState": {
+        "atmosphere": {
+          "o2Pct": 21.0,
+          "co2Pct": 0.04
+        },
+        "o2Generator": {
+          "active": false,
+          "count": 1,
+          "tier": 1,
+          "target": 21.0
+        },
+        "co2Scrubber": {
+          "active": false,
+          "count": 1,
+          "tier": 1,
+          "target": 0.04
+        },
+        "battery": {
+          "currentWh": 100,
+          "capacityWh": 1000,
+          "count": 1,
+          "tier": 1,
+          "target": 80.0
+        },
+        "generator": {
+          "active": false
+        },
+        "fuel": {
+          "currentL": 10,
+          "capacityL": 100
+        }
+      }
+    }
+  ]
+}

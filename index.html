@@ -16,23 +16,60 @@
         </div>
     </div>
 
+    <!-- Backstory intro modal — shown on New Game -->
+    <div id="intro-modal" class="intro-overlay" style="display:none;">
+        <div class="intro-content">
+            <div class="intro-header">
+                <div class="intro-year">YEAR 2287 &mdash; PORT CARROW, KEL VETH III</div>
+                <h2 class="intro-title">YOUR STORY BEGINS</h2>
+            </div>
+            <div class="intro-body">
+                <p class="intro-lead">Two years ago, the Cassian Freight Consortium dissolved its entire mid-range fleet division overnight. Two thousand jobs erased from the payroll with a single board decision.</p>
+                <p>You were their senior fleet engineer &mdash; fourteen years keeping Vagrant-class haulers operational through ion interference, dust-belt transits, and every failure the outer shipping lanes could invent. None of that mattered when the balance sheet ran dry.</p>
+                <p>The Great Contraction arrived without warning. Hyperautomation had already hollowed out the cargo sector. When three planetary bond markets collapsed in the same fiscal quarter, passage offworld became something other people could afford.</p>
+                <p>Two years on Kel Veth III. Dockyard maintenance. Life support calibration on ageing ore trawlers. Loading shifts at Bay 9 when the automated rigs broke down &mdash; which was more often than the foreman liked to admit.</p>
+                <p>Eight hundred and fifty credits. That&rsquo;s what Harlow&rsquo;s Salvage charged for her. A Pell-Dyne Vagrant Mk.I with a cracked heat shield patch and a temperamental O&#8322; generator. Previous owner didn&rsquo;t bother with the registration transfer. The original Pell-Dyne logo was still stencilled on the fuel coupling.</p>
+                <p>But you know every rivet of this class. You know which relay to bypass when the scrubber alarm trips at 0300, and how many hours you have before it matters.</p>
+                <p class="intro-finale">The ship needs work. You need credits. And out there in the lanes between the stars, people need things moved.</p>
+                <p class="intro-tagline">Time to earn your way off this rock.</p>
+            </div>
+            <div class="intro-ship-card">
+                <img id="intro-ship-img" src="assets/ships/vagrant-mk1.svg" class="intro-ship-img" alt="Vagrant Mk.I"/>
+                <div class="intro-ship-label">
+                    <span class="intro-ship-name" id="intro-ship-name">STRAY LIGHT</span>
+                    <span class="intro-ship-class" id="intro-ship-class">Vagrant Mk.I &middot; Pell-Dyne Systems &middot; Reg. PDR-4471-K</span>
+                </div>
+            </div>
+            <button id="intro-continue-btn" class="intro-continue">BEGIN YOUR STORY &rarr;</button>
+        </div>
+    </div>
+
     <div id="game-container" class="game-container" style="display: none;">
         <header class="game-header">
-            <h1>Starship Operations Dashboard</h1>
-            <div class="header-right">
-                <div class="game-stats">
-                    <div class="stat">Day <span id="day-counter">1</span></div>
-                    <div class="stat"><span id="timer">00:00</span> ship time</div>
-                    <div class="stat">Credits: <span id="credits">1000</span></div>
-                    <div class="stat">Crew: <span id="crew">1</span></div>
+            <div class="header-top">
+                <div class="ship-identity">
+                    <img id="ship-thumb" src="assets/ships/vagrant-mk1.svg" class="ship-thumb" alt="Ship"/>
+                    <div class="ship-info">
+                        <span class="ship-name" id="ship-name">STRAY LIGHT</span>
+                        <span class="ship-class" id="ship-class">Vagrant Mk.I &middot; Pell-Dyne Systems</span>
+                        <span class="ship-reg" id="ship-reg">PDR-4471-K</span>
+                    </div>
                 </div>
-                <div class="speed-controls">
-                    <span class="speed-label">Speed:</span>
-                    <button class="speed-btn speed-active" id="speed-1x">1&times;</button>
-                    <button class="speed-btn" id="speed-10x">10&times;</button>
-                    <button class="speed-btn" id="speed-100x">100&times;</button>
+                <div class="header-right">
+                    <div class="game-stats">
+                        <div class="stat">Day <span id="day-counter">1</span></div>
+                        <div class="stat"><span id="timer">00:00</span> ship time</div>
+                        <div class="stat">Credits: <span id="credits">1000</span></div>
+                        <div class="stat">Crew: <span id="crew">1</span></div>
+                    </div>
+                    <div class="speed-controls">
+                        <span class="speed-label">Speed:</span>
+                        <button class="speed-btn speed-active" id="speed-1x">1&times;</button>
+                        <button class="speed-btn" id="speed-10x">10&times;</button>
+                        <button class="speed-btn" id="speed-100x">100&times;</button>
+                    </div>
+                    <span id="save-status" class="save-status"></span>
                 </div>
-                <span id="save-status" class="save-status"></span>
             </div>
         </header>
 

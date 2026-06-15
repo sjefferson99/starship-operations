@@ -8,6 +8,13 @@ class StarshipGame {
         this.gameTime   = 0;
         this.gameSpeed  = 1;
 
+        // Ship identity (loaded from ship databases)
+        this.shipInstanceId   = 'player-ship-1';
+        this.shipName         = 'Stray Light';
+        this.shipRegistration = 'PDR-4471-K';
+        this.shipClass        = null; // populated from ship_classes.json
+        this.shipInstance     = null; // populated from ship_instances.json
+
         // Environment state
         this.inBreathableAtmosphere = true;
         this.ventsOpen              = false;
@@ -17,6 +24,7 @@ class StarshipGame {
         this.launchScreen  = document.getElementById('launch-screen');
         this.gameContainer = document.getElementById('game-container');
         this.pauseMenu     = document.getElementById('pause-menu');
+        this.introModal    = document.getElementById('intro-modal');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
@@ -24,6 +32,7 @@ class StarshipGame {
 
         this.systemUpdate = new SystemUpdate(this);
         this._bindEvents();
+        this._loadShipDatabases();
         this.updateDisplay();
     }
 
@@ -57,7 +66,8 @@ class StarshipGame {
     }
 
     _bindEvents() {
-        document.getElementById('new-game-btn').addEventListener('click',  () => this.startNewGame());
+        document.getElementById('new-game-btn').addEventListener('click',  () => this._showIntro());
+        document.getElementById('intro-continue-btn').addEventListener('click', () => this._startFromIntro());
         document.getElementById('load-game-btn').addEventListener('click', () => this.loadGame());
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
@@ -93,6 +103,65 @@ class StarshipGame {
         });
     }
 
+    // ── Ship database loading ───────────────────────────────────────────────
+
+    async _loadShipDatabases() {
+        try {
+            const [classResp, instanceResp] = await Promise.all([
+                fetch('data/ship_classes.json'),
+                fetch('data/ship_instances.json'),
+            ]);
+            if (classResp.ok) {
+                const classDb = await classResp.json();
+                this.shipClass = classDb.classes?.find(c => c.id === 'vagrant-mk1') ?? null;
+            }
+            if (instanceResp.ok) {
+                const instanceDb = await instanceResp.json();
+                this.shipInstance = instanceDb.ships?.find(s => s.id === this.shipInstanceId) ?? null;
+                if (this.shipInstance) {
+                    this.shipName         = this.shipInstance.name;
+                    this.shipRegistration = this.shipInstance.registration;
+                }
+            }
+            this._updateShipIdentityUI();
+        } catch { /* offline / file:// mode — fall back to defaults */ }
+    }
+
+    _updateShipIdentityUI() {
+        const nameEl  = document.getElementById('ship-name');
+        const classEl = document.getElementById('ship-class');
+        const regEl   = document.getElementById('ship-reg');
+        const imgEl   = document.getElementById('ship-thumb');
+
+        if (nameEl)  nameEl.textContent  = this.shipName;
+        if (classEl) classEl.textContent = this.shipClass
+            ? `${this.shipClass.name} · ${this.shipClass.manufacturer}`
+            : 'Vagrant Mk.I · Pell-Dyne Systems';
+        if (regEl)   regEl.textContent   = this.shipRegistration;
+        if (imgEl && this.shipClass?.image) imgEl.src = this.shipClass.image;
+    }
+
+    // ── Intro screen ────────────────────────────────────────────────────────
+
+    _showIntro() {
+        this.launchScreen.style.display = 'none';
+        this.introModal.style.display   = 'flex';
+        // Populate intro ship card from loaded data
+        const introName = document.getElementById('intro-ship-name');
+        const introClass = document.getElementById('intro-ship-class');
+        const introImg   = document.getElementById('intro-ship-img');
+        if (introName)  introName.textContent  = this.shipName;
+        if (introClass) introClass.textContent = this.shipClass
+            ? `${this.shipClass.name} · ${this.shipClass.manufacturer} · Reg. ${this.shipRegistration}`
+            : `Vagrant Mk.I · Pell-Dyne Systems · Reg. ${this.shipRegistration}`;
+        if (introImg && this.shipClass?.image) introImg.src = this.shipClass.image;
+    }
+
+    _startFromIntro() {
+        this.introModal.style.display = 'none';
+        this.startNewGame();
+    }
+
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
     startNewGame() {
@@ -104,10 +173,18 @@ class StarshipGame {
         this.crew                   = 1;
         this.inBreathableAtmosphere = true;
         this.ventsOpen              = false;
-        this.systems                = this._defaultSystems();
+
+        // Load starting system state from ship instance if available
+        if (this.shipInstance?.systemState) {
+            this.systems = this._defaultSystems();
+            GameState._applySystemState(this, this.shipInstance.systemState);
+        } else {
+            this.systems = this._defaultSystems();
+        }
 
         this._applySpeedUI();
         this._syncTargetInputs();
+        this._updateShipIdentityUI();
         this.launchScreen.style.display  = 'none';
         this.gameContainer.style.display = 'block';
         this._startTimer();
@@ -121,6 +198,7 @@ class StarshipGame {
             this.gamePaused = false;
             this._applySpeedUI();
             this._syncTargetInputs();
+            this._updateShipIdentityUI();
             this.launchScreen.style.display  = 'none';
             this.gameContainer.style.display = 'block';
             this._startTimer();

@@ -8,10 +8,12 @@ const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-const ROOT      = __dirname;
-const SAVE_DIR  = path.join(ROOT, 'savegame');
-const SAVE_FILE = path.join(SAVE_DIR, 'save.json');
-const PORT      = 3001;
+const ROOT               = __dirname;
+const SAVE_DIR           = path.join(ROOT, 'savegame');
+const SAVE_FILE          = path.join(SAVE_DIR, 'save.json');
+const DATA_DIR           = path.join(ROOT, 'data');
+const SHIP_INSTANCES_FILE = path.join(DATA_DIR, 'ship_instances.json');
+const PORT               = 3001;
 
 // Create savegame directory if it doesn't exist
 fs.mkdirSync(SAVE_DIR, { recursive: true });
@@ -21,6 +23,7 @@ const MIME_TYPES = {
     '.css':  'text/css',
     '.js':   'application/javascript',
     '.json': 'application/json',
+    '.svg':  'image/svg+xml',
     '.ico':  'image/x-icon',
 };
 
@@ -42,6 +45,37 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    // ── Ship instances API ───────────────────────────────────────────────────
+    if (url === '/api/ship-instances') {
+        if (req.method === 'GET') {
+            if (!fs.existsSync(SHIP_INSTANCES_FILE)) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'No ship instances file found' }));
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(fs.readFileSync(SHIP_INSTANCES_FILE, 'utf8'));
+
+        } else if (req.method === 'POST') {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                try {
+                    JSON.parse(body);
+                    fs.writeFileSync(SHIP_INSTANCES_FILE, body);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ ok: true }));
+                } catch {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                }
+            });
+        } else {
+            res.writeHead(405); res.end();
+        }
+        return;
+    }
 
     // ── Save-game API ────────────────────────────────────────────────────────
     if (url === '/api/save') {
