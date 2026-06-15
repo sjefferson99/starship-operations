@@ -1,0 +1,86 @@
+/* ══════════════════════════════════════════════════════════════════
+   BACKGROUND THEMES
+   Switch by setting data-bg on <body>: "space" | "city"
+   JS helper: game.setBackground('space' | 'city')
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── SPACE — deep-void starfield ── */
+/* Used when the ship is in transit between systems or in orbit.    */
+body[data-bg="space"] {
+    background: linear-gradient(135deg, #0c1445 0%, #1a1a2e 100%);
+}
+body[data-bg="space"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+        radial-gradient(2px 2px at  20px  30px, #eee, transparent),
+        radial-gradient(2px 2px at  40px  70px, #fff, transparent),
+        radial-gradient(1px 1px at  90px  40px, #fff, transparent),
+        radial-gradient(1px 1px at 130px  80px, #fff, transparent),
+        radial-gradient(2px 2px at 160px  30px, #fff, transparent),
+        radial-gradient(1px 1px at 200px  70px, #fff, transparent);
+    background-repeat: repeat;
+    background-size: 250px 150px;
+    animation: starscroll 20s linear infinite;
+    z-index: -1;
+}
+@keyframes starscroll {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-150px); }
+}
+
+/* ── CITY — Kel Veth III, dystopian planet surface ── */
+/* Used on the ground: launch screen, intro, and early gameplay.   */
+body[data-bg="city"] {
+    background: linear-gradient(180deg,
+        #040101  0%,
+        #0e0404 18%,
+        #1c0805 38%,
+        #2e0f08 55%,
+        #4a1a0a 67%,
+        #3a1208 78%,
+        #1e0904 90%,
+        #120504 100%
+    );
+}
+
+/* Silhouette: dense industrial skyline with antenna spires */
+body[data-bg="city"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(180deg, #0f0604 0%, #160a07 60%, #1c0d08 100%);
+    clip-path: polygon(
+        0% 100%, 0% 63%,
+        5% 63%, 5% 45%, 9% 45%, 9% 68%, 10% 68%,
+        10% 28%, 13.5% 28%, 13.5% 16%, 14% 16%, 14% 28%, 16% 28%, 16% 68%,
+        17% 68%, 17% 48%, 21% 48%, 21% 35%, 24% 35%, 24% 70%, 25% 70%,
+        25% 30%, 31% 30%, 31% 50%, 35% 50%, 35% 72%, 36% 72%,
+        36% 22%, 37% 22%, 37% 10%, 37.8% 10%, 37.8% 22%, 40% 22%,
+        40% 42%, 43% 42%, 43% 68%, 44% 68%,
+        44% 30%, 48% 30%, 48% 52%, 52% 52%,
+        52% 38%, 56% 38%,
+        56% 24%, 57.5% 24%, 57.5% 12%, 58.3% 12%, 58.3% 24%, 61% 24%,
+        61% 52%, 64% 52%, 64% 68%, 65% 68%,
+        65% 40%, 70% 40%, 70% 30%, 74% 30%,
+        74% 55%, 78% 55%, 78% 42%, 82% 42%,
+        82% 32%, 87% 32%, 87% 58%, 91% 58%,
+        91% 48%, 96% 48%, 96% 62%, 100% 62%,
+        100% 100%
+    );
+    z-index: -1;
+}
+
+/* Horizon pollution haze and ambient glow from city lights */
+body[data-bg="city"]::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse 130% 28% at 50% 67%, rgba(165, 62, 12, 0.32) 0%, transparent 70%),
+        radial-gradient(ellipse 60%  14% at 22% 65%, rgba( 90, 28,  4, 0.22) 0%, transparent 100%),
+        radial-gradient(ellipse 55%  12% at 78% 64%, rgba(120, 44,  8, 0.20) 0%, transparent 100%);
+    z-index: -1;
+    pointer-events: none;
+}

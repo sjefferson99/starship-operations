@@ -6,7 +6,7 @@
     <title>Starship Operations</title>
     <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-bg="space">
     <div id="launch-screen" class="launch-screen">
         <h1>STARSHIP OPERATIONS</h1>
         <div class="launch-menu">
@@ -16,23 +16,11 @@
         </div>
     </div>
 
-    <!-- Backstory intro modal — shown on New Game -->
+    <!-- Backstory intro modal — content injected from data/intro_messages.json -->
     <div id="intro-modal" class="intro-overlay" style="display:none;">
         <div class="intro-content">
-            <div class="intro-header">
-                <div class="intro-year">YEAR 2287 &mdash; PORT CARROW, KEL VETH III</div>
-                <h2 class="intro-title">YOUR STORY BEGINS</h2>
-            </div>
-            <div class="intro-body">
-                <p class="intro-lead">Two years ago, the Cassian Freight Consortium dissolved its entire mid-range fleet division overnight. Two thousand jobs erased from the payroll with a single board decision.</p>
-                <p>You were their senior fleet engineer &mdash; fourteen years keeping Vagrant-class haulers operational through ion interference, dust-belt transits, and every failure the outer shipping lanes could invent. None of that mattered when the balance sheet ran dry.</p>
-                <p>The Great Contraction arrived without warning. Hyperautomation had already hollowed out the cargo sector. When three planetary bond markets collapsed in the same fiscal quarter, passage offworld became something other people could afford.</p>
-                <p>Two years on Kel Veth III. Dockyard maintenance. Life support calibration on ageing ore trawlers. Loading shifts at Bay 9 when the automated rigs broke down &mdash; which was more often than the foreman liked to admit.</p>
-                <p>Eight hundred and fifty credits. That&rsquo;s what Harlow&rsquo;s Salvage charged for her. A Pell-Dyne Vagrant Mk.I with a cracked heat shield patch and a temperamental O&#8322; generator. Previous owner didn&rsquo;t bother with the registration transfer. The original Pell-Dyne logo was still stencilled on the fuel coupling.</p>
-                <p>But you know every rivet of this class. You know which relay to bypass when the scrubber alarm trips at 0300, and how many hours you have before it matters.</p>
-                <p class="intro-finale">The ship needs work. You need credits. And out there in the lanes between the stars, people need things moved.</p>
-                <p class="intro-tagline">Time to earn your way off this rock.</p>
-            </div>
+            <div class="intro-header" id="intro-header"></div>
+            <div class="intro-body" id="intro-body"></div>
             <div class="intro-ship-card">
                 <img id="intro-ship-img" src="assets/ships/vagrant-mk1.svg" class="intro-ship-img" alt="Vagrant Mk.I"/>
                 <div class="intro-ship-label">
@@ -306,12 +294,14 @@
     </div>
 
     <div id="pause-menu" class="pause-menu" style="display: none;">
-        <h2>Game Paused</h2>
-        <div class="pause-options">
-            <button id="resume-btn">Resume Game</button>
-            <button id="save-btn">Save Game</button>
-            <button id="export-btn">Export Save File</button>
-            <button id="main-menu-btn">Main Menu</button>
+        <div class="pause-card">
+            <h2>Game Paused</h2>
+            <div class="pause-options">
+                <button id="resume-btn">Resume Game</button>
+                <button id="save-btn">Save Game</button>
+                <button id="export-btn">Export Save File</button>
+                <button id="main-menu-btn">Main Menu</button>
+            </div>
         </div>
     </div>
 

@@ -1,0 +1,40 @@
+{
+  "new-game": {
+    "background": "city",
+    "header": {
+      "year": 2287,
+      "location": "PORT CARROW, KEL VETH III",
+      "title": "YOUR STORY BEGINS"
+    },
+    "body": [
+      {
+        "class": "intro-lead",
+        "text": "Two years ago, the Cassian Freight Consortium dissolved its entire mid-range fleet division overnight. Two thousand jobs erased from the payroll with a single board decision."
+      },
+      {
+        "text": "You were their senior fleet engineer — fourteen years keeping Vagrant-class haulers operational through ion interference, dust-belt transits, and every failure the outer shipping lanes could invent. None of that mattered when the balance sheet ran dry."
+      },
+      {
+        "text": "The Great Contraction arrived without warning. Hyperautomation had already hollowed out the cargo sector. When three planetary bond markets collapsed in the same fiscal quarter, passage offworld became something other people could afford."
+      },
+      {
+        "text": "Two years on Kel Veth III. Dockyard maintenance. Life support calibration on ageing ore trawlers. Loading shifts at Bay 9 when the automated rigs broke down — which was more often than the foreman liked to admit."
+      },
+      {
+        "text": "Eight hundred and fifty credits. That’s what Harlow’s Salvage charged for her. A Pell-Dyne Vagrant Mk.I with a cracked heat shield patch and a temperamental O₂ generator. Previous owner didn’t bother with the registration transfer. The original Pell-Dyne logo was still stencilled on the fuel coupling."
+      },
+      {
+        "text": "But you know every rivet of this class. You know which relay to bypass when the scrubber alarm trips at 0300, and how many hours you have before it matters."
+      },
+      {
+        "class": "intro-finale",
+        "text": "The ship needs work. You need credits. And out there in the lanes between the stars, people need things moved."
+      },
+      {
+        "class": "intro-tagline",
+        "text": "Time to earn your way off this rock."
+      }
+    ],
+    "continueLabel": "BEGIN YOUR STORY →"
+  }
+}

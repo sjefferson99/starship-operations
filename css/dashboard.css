@@ -1,0 +1,457 @@
+/* ══════════════════════════════════════════════════════════════════
+   OPERATIONS DASHBOARD — in-game UI
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Outer container ── */
+.game-container {
+    width: 100%;
+    max-width: 1400px;
+    background: rgba(10, 15, 45, 0.88);
+    border-radius: 18px;
+    border: 1px solid rgba(0, 150, 255, 0.25);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+}
+
+/* ── Header bar ── */
+.game-header {
+    background: linear-gradient(90deg, #081525 0%, #0d2b45 100%);
+    padding: 12px 24px;
+    border-bottom: 1px solid rgba(0, 150, 255, 0.3);
+}
+.header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.header-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+/* ── Ship identity panel ── */
+.ship-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.ship-thumb {
+    width: 120px;
+    height: 57px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 6px rgba(79, 195, 247, 0.4));
+    flex-shrink: 0;
+}
+.ship-info {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.ship-name {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #4fc3f7;
+    letter-spacing: 3px;
+    text-shadow: 0 0 10px rgba(79, 195, 247, 0.6);
+    line-height: 1;
+}
+.ship-class {
+    font-size: 0.72rem;
+    color: #78909c;
+    letter-spacing: 0.5px;
+    font-style: italic;
+}
+.ship-reg {
+    font-size: 0.68rem;
+    color: #546e7a;
+    font-family: monospace;
+    letter-spacing: 1px;
+}
+
+/* ── Stats row ── */
+.game-stats { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.stat {
+    background: rgba(0, 100, 200, 0.25);
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #c8e6ff;
+    border: 1px solid rgba(0, 150, 255, 0.3);
+}
+
+/* ── Game speed selector ── */
+.speed-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.speed-label {
+    font-size: 0.72rem;
+    color: #546e7a;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.speed-btn {
+    padding: 3px 11px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 14px;
+    background: rgba(0, 114, 255, 0.12);
+    color: #546e7a;
+    border: 1px solid rgba(0, 114, 255, 0.2);
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.3px;
+}
+.speed-btn:hover {
+    background: rgba(0, 114, 255, 0.25);
+    color: #90caf9;
+    transform: none;
+    box-shadow: none;
+}
+.speed-btn.speed-active {
+    background: rgba(0, 198, 255, 0.25);
+    color: #e0f7fa;
+    border-color: rgba(0, 198, 255, 0.6);
+    box-shadow: 0 0 8px rgba(0, 198, 255, 0.25);
+}
+
+/* ── Main content area ── */
+.game-main {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* ── Systems grid ── */
+.system-dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+/* ── System cards ── */
+.system-card {
+    background: linear-gradient(160deg, #0d1b2a 0%, #162032 100%);
+    border-radius: 14px;
+    padding: 20px;
+    border: 1px solid rgba(0, 150, 255, 0.18);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+    position: relative;
+    overflow: hidden;
+}
+.system-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 4px;
+    background: linear-gradient(90deg, #00c6ff, #0072ff);
+}
+.system-card.card-warning {
+    border-color: rgba(255, 152, 0, 0.5);
+    box-shadow: 0 0 20px rgba(255, 152, 0, 0.2);
+}
+.system-card.card-warning::before {
+    background: linear-gradient(90deg, #ff9800, #ff5722);
+}
+.system-card.card-critical {
+    border-color: rgba(244, 67, 54, 0.6);
+    box-shadow: 0 0 24px rgba(244, 67, 54, 0.3);
+    animation: pulse-danger 1.5s ease-in-out infinite;
+}
+.system-card.card-critical::before {
+    background: linear-gradient(90deg, #f44336, #b71c1c);
+}
+@keyframes pulse-danger {
+    0%, 100% { box-shadow: 0 0 24px rgba(244, 67, 54, 0.3); }
+    50%       { box-shadow: 0 0 36px rgba(244, 67, 54, 0.6); }
+}
+
+/* ── Card header ── */
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.card-header h3 {
+    font-size: 1.1rem;
+    color: #4fc3f7;
+    letter-spacing: 0.5px;
+}
+
+/* ── Main value display ── */
+.main-value {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.value-large {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #e0f7fa;
+    text-shadow: 0 0 8px rgba(79, 195, 247, 0.4);
+    font-variant-numeric: tabular-nums;
+}
+.value-label {
+    font-size: 0.8rem;
+    color: #78909c;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ── Zone gauges ── */
+.gauge-container {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.gauge-track {
+    position: relative;
+    height: 18px;
+    border-radius: 9px;
+    overflow: visible;
+}
+
+/* O2: red → amber → green → amber  (0–25%, zone breaks at 16%, 19.5%, 23.5%) */
+.o2-zones {
+    background: linear-gradient(to right,
+        #c62828 0%,  #c62828 64%,
+        #e65100 64%, #e65100 78%,
+        #2e7d32 78%, #2e7d32 94%,
+        #e65100 94%, #e65100 100%
+    );
+}
+
+/* CO2: green → amber → red  (0–10000 ppm, zone breaks at 1000 and 5000) */
+.co2-zones {
+    background: linear-gradient(to right,
+        #2e7d32 0%,  #2e7d32 10%,
+        #e65100 10%, #e65100 50%,
+        #c62828 50%, #c62828 100%
+    );
+}
+
+/* Resources (battery / fuel — more is better): red → amber → green */
+.resource-zones {
+    background: linear-gradient(to right,
+        #c62828  0%, #c62828 10%,
+        #e65100 10%, #e65100 30%,
+        #2e7d32 30%, #2e7d32 100%
+    );
+}
+
+/* Needle */
+.gauge-indicator {
+    position: absolute;
+    top: -5px;
+    width: 3px;
+    height: calc(100% + 10px);
+    background: #ffffff;
+    border-radius: 2px;
+    transform: translateX(-50%);
+    box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+    transition: left 0.8s ease;
+    z-index: 2;
+}
+
+/* Scale labels */
+.gauge-scale {
+    position: relative;
+    height: 14px;
+    font-size: 0.62rem;
+    color: #546e7a;
+}
+.gauge-scale span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+/* Zone legend key */
+.zone-legend {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 0.65rem;
+    margin-top: 2px;
+}
+.legend-item { font-weight: 500; }
+.legend-red   { color: #ef5350; }
+.legend-amber { color: #ffa726; }
+.legend-green { color: #66bb6a; }
+
+/* ── Rate panel ── */
+.rate-panel {
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.rate-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+}
+.rate-net-row {
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 5px;
+    margin-top: 2px;
+    font-weight: 600;
+}
+.rate-label { color: #78909c; }
+.rate-value { font-variant-numeric: tabular-nums; color: #b0bec5; }
+.rate-neg      { color: #ef5350; }
+.rate-pos      { color: #ef5350; }
+.rate-pos-bad  { color: #ef5350; }
+.rate-neg-good { color: #66bb6a; }
+.rate-pos-good { color: #66bb6a; }
+
+/* ── Projection panel ── */
+.projection-panel {
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    padding: 6px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 0.78rem;
+}
+.proj-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1px 0;
+}
+.proj-label { color: #78909c; }
+.proj-value { font-variant-numeric: tabular-nums; font-weight: 600; }
+.proj-stable { color: #546e7a; font-style: italic; }
+.proj-warn .proj-label, .proj-warn .proj-value { color: #ffa726; }
+.proj-crit .proj-label, .proj-crit .proj-value { color: #ef5350; }
+.proj-dead .proj-label, .proj-dead .proj-value { color: #b71c1c; font-weight: 700; }
+.proj-safe .proj-label, .proj-safe .proj-value { color: #66bb6a; }
+.proj-good .proj-label, .proj-good .proj-value { color: #4fc3f7; }
+
+/* ── Environment / Vent panel ── */
+.environment-panel {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    background: rgba(0,0,0,0.2);
+    border-radius: 10px;
+    border: 1px solid rgba(0, 150, 255, 0.15);
+    padding: 10px 18px;
+    flex-wrap: wrap;
+}
+.env-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+}
+.env-divider {
+    width: 1px;
+    height: 28px;
+    background: rgba(255,255,255,0.1);
+    margin: 0 18px;
+}
+.env-dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: #37474f;
+    flex-shrink: 0;
+    transition: background 0.3s, box-shadow 0.3s;
+}
+.env-dot.breathable {
+    background: #66bb6a;
+    box-shadow: 0 0 8px rgba(102, 187, 106, 0.6);
+}
+.env-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #78909c;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+/* ── System controls row ── */
+.system-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.82rem;
+    color: #90a4ae;
+    margin-top: 2px;
+}
+.system-controls strong { color: #e0f7fa; }
+
+/* ── Fuel card (no toggle button) ── */
+.system-info {
+    font-size: 0.78rem;
+    color: #546e7a;
+    padding: 4px 2px;
+    font-style: italic;
+}
+
+/* ── Auto-target row ── */
+.auto-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+.auto-label {
+    flex: 1;
+    font-size: 0.75rem;
+    color: #546e7a;
+}
+.auto-input {
+    width: 64px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(0, 150, 255, 0.25);
+    border-radius: 6px;
+    color: #c8e6ff;
+    font-size: 0.78rem;
+    padding: 3px 6px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.auto-input:focus {
+    outline: none;
+    border-color: rgba(0, 150, 255, 0.6);
+    box-shadow: 0 0 6px rgba(0, 150, 255, 0.2);
+}
+.auto-unit {
+    font-size: 0.72rem;
+    color: #455a64;
+    min-width: 32px;
+}
+
+/* ── Game controls bar ── */
+.game-controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+/* ── Footer ── */
+.game-footer {
+    background: rgba(5, 10, 30, 0.8);
+    padding: 10px 24px;
+    text-align: center;
+    font-size: 0.75rem;
+    color: #455a64;
+    border-top: 1px solid rgba(0, 150, 255, 0.15);
+}

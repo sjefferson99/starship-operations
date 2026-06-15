@@ -14,6 +14,7 @@ class StarshipGame {
         this.shipRegistration = 'PDR-4471-K';
         this.shipClass        = null; // populated from ship_classes.json
         this.shipInstance     = null; // populated from ship_instances.json
+        this.storyMessages    = null; // populated from story_messages.json
 
         // Environment state
         this.inBreathableAtmosphere = true;
@@ -33,7 +34,14 @@ class StarshipGame {
         this.systemUpdate = new SystemUpdate(this);
         this._bindEvents();
         this._loadShipDatabases();
+        this.setBackground('space');
         this.updateDisplay();
+    }
+
+    // ── Background theme ────────────────────────────────────────────────────
+    // Call with 'city' (planet surface) or 'space' (in transit / orbit)
+    setBackground(theme) {
+        document.body.dataset.bg = theme;
     }
 
     _defaultSystems() {
@@ -107,9 +115,10 @@ class StarshipGame {
 
     async _loadShipDatabases() {
         try {
-            const [classResp, instanceResp] = await Promise.all([
+            const [classResp, instanceResp, storyResp] = await Promise.all([
                 fetch('data/ship_classes.json'),
                 fetch('data/ship_instances.json'),
+                fetch('data/story_messages.json'),
             ]);
             if (classResp.ok) {
                 const classDb = await classResp.json();
@@ -122,6 +131,9 @@ class StarshipGame {
                     this.shipName         = this.shipInstance.name;
                     this.shipRegistration = this.shipInstance.registration;
                 }
+            }
+            if (storyResp.ok) {
+                this.storyMessages = await storyResp.json();
             }
             this._updateShipIdentityUI();
         } catch { /* offline / file:// mode — fall back to defaults */ }
@@ -146,8 +158,11 @@ class StarshipGame {
     _showIntro() {
         this.launchScreen.style.display = 'none';
         this.introModal.style.display   = 'flex';
-        // Populate intro ship card from loaded data
-        const introName = document.getElementById('intro-ship-name');
+
+        const msg = this.storyMessages?.['new-game'];
+        if (msg) this._injectIntroContent(msg);
+
+        const introName  = document.getElementById('intro-ship-name');
         const introClass = document.getElementById('intro-ship-class');
         const introImg   = document.getElementById('intro-ship-img');
         if (introName)  introName.textContent  = this.shipName;
@@ -155,6 +170,30 @@ class StarshipGame {
             ? `${this.shipClass.name} · ${this.shipClass.manufacturer} · Reg. ${this.shipRegistration}`
             : `Vagrant Mk.I · Pell-Dyne Systems · Reg. ${this.shipRegistration}`;
         if (introImg && this.shipClass?.image) introImg.src = this.shipClass.image;
+    }
+
+    _injectIntroContent(msg) {
+        const headerEl = document.getElementById('intro-header');
+        const bodyEl   = document.getElementById('intro-body');
+        const contBtn  = document.getElementById('intro-continue-btn');
+
+        if (headerEl && msg.header) {
+            headerEl.innerHTML =
+                `<div class="intro-year">YEAR ${msg.header.year} — ${msg.header.location}</div>` +
+                `<h2 class="intro-title">${msg.header.title}</h2>`;
+        }
+
+        if (bodyEl && msg.body) {
+            bodyEl.innerHTML = msg.body
+                .map(p => `<p${p.class ? ` class="${p.class}"` : ''}>${p.text}</p>`)
+                .join('');
+        }
+
+        if (contBtn && msg.continueLabel) {
+            contBtn.textContent = msg.continueLabel;
+        }
+
+        if (msg.background) this.setBackground(msg.background);
     }
 
     _startFromIntro() {
@@ -196,6 +235,11 @@ class StarshipGame {
             await GameState.loadServer(this);
             this.gameActive = true;
             this.gamePaused = false;
+            // Restore background from save, or fall back to the starting location
+            const savedBg = this.saveData?.background
+                ?? this.storyMessages?.['new-game']?.background
+                ?? 'city';
+            this.setBackground(savedBg);
             this._applySpeedUI();
             this._syncTargetInputs();
             this._updateShipIdentityUI();
@@ -210,6 +254,7 @@ class StarshipGame {
         if (confirm('Quit to main menu?')) {
             this._stopTimer();
             this.gameActive = false;
+            this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
             this.pauseMenu.style.display     = 'none';
@@ -241,7 +286,7 @@ class StarshipGame {
     togglePause() {
         if (!this.gameActive) return;
         this.gamePaused = !this.gamePaused;
-        this.pauseMenu.style.display = this.gamePaused ? 'block' : 'none';
+        this.pauseMenu.style.display = this.gamePaused ? 'flex' : 'none';
     }
 
     async saveGame() {
@@ -257,6 +302,7 @@ class StarshipGame {
         if (confirm('Return to main menu? Unsaved progress will be lost.')) {
             this._stopTimer();
             this.gameActive = false;
+            this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
             this.pauseMenu.style.display     = 'none';
