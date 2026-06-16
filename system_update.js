@@ -12,21 +12,22 @@ class SystemUpdate {
         this.O2_CONSUMPTION_L_HR  = 15.0; // 250 mL/min × 60
         this.CO2_PRODUCTION_L_HR  = 12.0; // 200 mL/min × 60
 
-        // ── Device specs by tier (index = tier - 1) ─────────────────────────
-        // Tier 1 output = 1.5× one-person consumption, so a single unit keeps
-        // pace with 1 person and has 50% headroom to recover atmosphere.
-        this.O2_GEN_L_HR_BY_TIER  = [22.5]; // 1.5 × 15 L/hr
-        this.CO2_SCR_L_HR_BY_TIER = [18.0]; // 1.5 × 12 L/hr
-
-        // Power draw per unit (W)
-        this.O2_DRAW_W_BY_TIER    = [21];   // 1000 Wh ÷ 24 hr ÷ 2 devices
+        // Fallback device specs (index = tier - 1), used only if
+        // data/module_specs.json hasn't finished loading yet.
+        this.O2_GEN_L_HR_BY_TIER  = [22.5];
+        this.CO2_SCR_L_HR_BY_TIER = [18.0];
+        this.O2_DRAW_W_BY_TIER    = [21];
         this.CO2_DRAW_W_BY_TIER   = [21];
-
-        // Generator (fuel-powered): output and consumption
-        // Output covers both tier-1 devices at full draw (42 W) plus 100 W
-        // surplus → +10 %/hr battery charge when both units are active.
         this.GEN_OUTPUT_W    = 142;
-        this.GEN_FUEL_L_HR   = 0.01; // 1 cL/hr
+        this.GEN_FUEL_L_HR   = 0.01;
+    }
+
+    // Reads a per-tier numeric field from the loaded module_specs.json,
+    // falling back to the constructor defaults above if not yet loaded.
+    _moduleField(moduleType, tier, field, fallback) {
+        const modules = this.game.moduleSpecs && this.game.moduleSpecs.modules;
+        const spec = modules && modules[moduleType] && modules[moduleType][String(tier)];
+        return spec && spec[field] != null ? spec[field] : fallback;
     }
 
     // dt: game-seconds elapsed this tick (= gameSpeed × 1 real second)
@@ -34,6 +35,8 @@ class SystemUpdate {
         this._updateO2(dt);
         this._updateCO2(dt);
         this._updatePowerAndFuel(dt);
+        this.game.repairManager.decay(dt);
+        this.game.repairManager.processQueue(dt);
         this._updateStatuses();
 
         if (this._isGameOver()) {
@@ -46,7 +49,9 @@ class SystemUpdate {
         const crew = this.game.crew;
 
         const consumptionLhr = this.O2_CONSUMPTION_L_HR * crew;
-        const maxGenLhr      = (this.O2_GEN_L_HR_BY_TIER[sys.tier - 1] ?? 0) * sys.count;
+        const ratedLhr       = this._moduleField('o2Generator', sys.tier, 'outputLhr', this.O2_GEN_L_HR_BY_TIER[sys.tier - 1] ?? 0);
+        const efficiency     = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
+        const maxGenLhr      = ratedLhr * sys.count * efficiency;
 
         // Vent computed first — needed to calculate maintenance generation
         let ventLhr = 0;
@@ -88,7 +93,9 @@ class SystemUpdate {
         const crew = this.game.crew;
 
         const productionLhr = this.CO2_PRODUCTION_L_HR * crew;
-        const maxScrLhr     = (this.CO2_SCR_L_HR_BY_TIER[sys.tier - 1] ?? 0) * sys.count;
+        const ratedLhr      = this._moduleField('co2Scrubber', sys.tier, 'outputLhr', this.CO2_SCR_L_HR_BY_TIER[sys.tier - 1] ?? 0);
+        const efficiency    = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
+        const maxScrLhr     = ratedLhr * sys.count * efficiency;
 
         // Vent computed first
         let ventLhr = 0; // positive = removing CO2 from cabin
@@ -130,23 +137,28 @@ class SystemUpdate {
         const co2   = this.game.systems.co2;
 
         // Power draw scales with fraction of rated output each device is currently using
+        const o2DrawWRated  = this._moduleField('o2Generator', o2.tier, 'powerDrawW', this.O2_DRAW_W_BY_TIER[o2.tier - 1] ?? 0);
+        const co2DrawWRated = this._moduleField('co2Scrubber', co2.tier, 'powerDrawW', this.CO2_DRAW_W_BY_TIER[co2.tier - 1] ?? 0);
         const o2DrawW  = o2.active
-            ? (this.O2_DRAW_W_BY_TIER[o2.tier - 1] ?? 0) * o2.count * (o2.genFraction ?? 1)
+            ? o2DrawWRated * o2.count * (o2.genFraction ?? 1)
             : 0;
         const co2DrawW = co2.active
-            ? (this.CO2_DRAW_W_BY_TIER[co2.tier - 1] ?? 0) * co2.count * (co2.scrFraction ?? 1)
+            ? co2DrawWRated * co2.count * (co2.scrFraction ?? 1)
             : 0;
         const totalDrawW = o2DrawW + co2DrawW;
 
         // Proportional generator: at/above battery target throttle to cover exact draw
         // so net battery = 0 and display reads "Stable" rather than flickering.
-        const genRunning = power.active && fuel.current > 0;
+        const ratedOutputW = this._moduleField('generator', power.tier, 'outputW', this.GEN_OUTPUT_W);
+        const genEfficiency = this.game.repairManager.efficiency(power.repairPct, power.destroyed);
+        const maxOutputW    = ratedOutputW * genEfficiency;
+        const genRunning = power.active && !power.destroyed && fuel.current > 0;
         let genOutputW = 0;
         if (genRunning) {
             if (power.target != null && power.level >= power.target) {
-                genOutputW = totalDrawW; // maintenance: exactly cover draw
+                genOutputW = Math.min(totalDrawW, maxOutputW); // maintenance: exactly cover draw
             } else {
-                genOutputW = this.GEN_OUTPUT_W; // below target: full output
+                genOutputW = maxOutputW; // below target: full (degraded) output
             }
         }
 
@@ -159,8 +171,9 @@ class SystemUpdate {
         power.co2DrawW   = co2DrawW;
         power.netWhr     = netW;
 
-        // Fuel burn proportional to generator output fraction
-        const genFraction   = this.GEN_OUTPUT_W > 0 ? genOutputW / this.GEN_OUTPUT_W : 0;
+        // Fuel burn proportional to nominal (undamaged) rated output — a degraded
+        // generator burns the same fuel per watt it can still produce.
+        const genFraction   = ratedOutputW > 0 ? genOutputW / ratedOutputW : 0;
         const fuelBurnLhr   = genRunning ? this.GEN_FUEL_L_HR * genFraction : 0;
         fuel.current        = Math.max(0, fuel.current - fuelBurnLhr * dt / 3600);
         fuel.level          = (fuel.current / fuel.capacity) * 100;
@@ -207,6 +220,14 @@ class SystemUpdate {
         } else {
             fuel.status = 'Normal';
         }
+
+        // A destroyed module is offline regardless of any other reading.
+        [o2, co2, power].forEach(sys => {
+            if (sys.destroyed) {
+                sys.status = 'Critical';
+                sys.active = false;
+            }
+        });
     }
 
     _isGameOver() {

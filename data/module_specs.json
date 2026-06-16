@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "modules": {
+    "o2Generator": {
+      "1": {
+        "powerDrawW": 21,
+        "outputLhr": 22.5,
+        "degradationPctPerHr": 0.14,
+        "repair": {
+          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
+          "major":       { "minPct": 20, "maxPct": 50, "hours": 10, "restorePct": 100 },
+          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 10, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
+        }
+      }
+    },
+    "co2Scrubber": {
+      "1": {
+        "powerDrawW": 21,
+        "outputLhr": 18.0,
+        "degradationPctPerHr": 0.14,
+        "repair": {
+          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
+          "major":       { "minPct": 20, "maxPct": 50, "hours": 10, "restorePct": 100 },
+          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 10, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
+        }
+      }
+    },
+    "generator": {
+      "1": {
+        "outputW": 142,
+        "fuelLhr": 0.01,
+        "degradationPctPerHr": 0.14,
+        "repair": {
+          "minor":       { "minPct": 50, "maxPct": 95, "hours": 4,  "restorePct": 100 },
+          "major":       { "minPct": 20, "maxPct": 50, "hours": 14, "restorePct": 100 },
+          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 14, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
+        }
+      }
+    }
+  }
+}

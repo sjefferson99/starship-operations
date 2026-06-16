@@ -18,13 +18,19 @@
           "active": false,
           "count": 1,
           "tier": 1,
-          "target": 21.0
+          "target": 21.0,
+          "repairPct": 100,
+          "juryRigged": false,
+          "destroyed": false
         },
         "co2Scrubber": {
           "active": false,
           "count": 1,
           "tier": 1,
-          "target": 0.04
+          "target": 0.04,
+          "repairPct": 100,
+          "juryRigged": false,
+          "destroyed": false
         },
         "battery": {
           "currentWh": 100,
@@ -34,13 +40,17 @@
           "target": 80.0
         },
         "generator": {
-          "active": false
+          "active": false,
+          "repairPct": 100,
+          "juryRigged": false,
+          "destroyed": false
         },
         "fuel": {
           "currentL": 10,
           "capacityL": 100
         }
-      }
+      },
+      "repairQueue": []
     }
   ]
 }

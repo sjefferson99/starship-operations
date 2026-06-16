@@ -1,0 +1,14 @@
+{
+  "version": "1.0.0",
+  "crew": [
+    {
+      "id": "player",
+      "name": "You",
+      "classes": ["engineering", "command"],
+      "shifts": [
+        { "startHour": 9,  "endHour": 13 },
+        { "startHour": 14, "endHour": 18 }
+      ]
+    }
+  ]
+}

@@ -55,7 +55,9 @@
                         <button class="speed-btn speed-active" id="speed-1x">1&times;</button>
                         <button class="speed-btn" id="speed-10x">10&times;</button>
                         <button class="speed-btn" id="speed-100x">100&times;</button>
+                        <button class="speed-btn" id="speed-1000x">1000&times;</button>
                     </div>
+                    <button id="repair-queue-btn" class="repair-queue-btn">Repair Queue</button>
                     <span id="save-status" class="save-status"></span>
                 </div>
             </div>
@@ -119,6 +121,14 @@
                         <span id="o2-status">Generator: <strong>OFF</strong></span>
                         <button id="o2-toggle" class="toggle-btn btn-off">Enable Generator</button>
                     </div>
+                    <div class="repair-panel">
+                        <div class="repair-row">
+                            <span class="repair-pct" id="o2-repair-pct">Repair: 100%</span>
+                            <span class="repair-status" id="o2-repair-status" style="display:none"></span>
+                        </div>
+                        <div class="repair-track"><div class="repair-fill repair-good" id="o2-repair-fill" style="width:100%"></div></div>
+                        <button id="o2-repair-btn" class="repair-btn" style="display:none">Repair</button>
+                    </div>
                 </div>
 
                 <!-- CO2 Scrubber Card -->
@@ -175,6 +185,14 @@
                         <span id="co2-status">Scrubber: <strong>OFF</strong></span>
                         <button id="co2-toggle" class="toggle-btn btn-off">Enable Scrubber</button>
                     </div>
+                    <div class="repair-panel">
+                        <div class="repair-row">
+                            <span class="repair-pct" id="co2-repair-pct">Repair: 100%</span>
+                            <span class="repair-status" id="co2-repair-status" style="display:none"></span>
+                        </div>
+                        <div class="repair-track"><div class="repair-fill repair-good" id="co2-repair-fill" style="width:100%"></div></div>
+                        <button id="co2-repair-btn" class="repair-btn" style="display:none">Repair</button>
+                    </div>
                 </div>
 
                 <!-- Power System Card -->
@@ -229,6 +247,14 @@
                     <div class="system-controls">
                         <span id="power-status">Generator: <strong>OFF</strong></span>
                         <button id="power-toggle" class="toggle-btn btn-off">Enable Generator</button>
+                    </div>
+                    <div class="repair-panel">
+                        <div class="repair-row">
+                            <span class="repair-pct" id="power-repair-pct">Repair: 100%</span>
+                            <span class="repair-status" id="power-repair-status" style="display:none"></span>
+                        </div>
+                        <div class="repair-track"><div class="repair-fill repair-good" id="power-repair-fill" style="width:100%"></div></div>
+                        <button id="power-repair-btn" class="repair-btn" style="display:none">Repair</button>
                     </div>
                 </div>
 
@@ -305,8 +331,22 @@
         </div>
     </div>
 
+    <div id="task-queue-screen" class="task-queue-screen" style="display: none;">
+        <div class="task-queue-card">
+            <div class="task-queue-header">
+                <h2>Repair Task Queue</h2>
+                <button id="task-queue-close-btn" class="task-queue-close-btn">&times;</button>
+            </div>
+            <p class="repair-crew-status" id="repair-crew-status">Engineering on duty: 0/0</p>
+            <ul id="repair-queue-list" class="task-queue-list">
+                <li class="task-empty">No repair tasks queued.</li>
+            </ul>
+        </div>
+    </div>
+
     <script src="game_state.js"></script>
     <script src="system_update.js"></script>
+    <script src="repair_manager.js"></script>
     <script src="main.js"></script>
 </body>
 </html>

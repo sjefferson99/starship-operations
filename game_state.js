@@ -52,12 +52,18 @@ class GameState {
                 count:  s.o2.count,
                 tier:   s.o2.tier,
                 target: s.o2.target ?? 21.0,
+                repairPct:  s.o2.repairPct ?? 100,
+                juryRigged: s.o2.juryRigged ?? false,
+                destroyed:  s.o2.destroyed ?? false,
             },
             co2Scrubber: {
                 active: s.co2.active,
                 count:  s.co2.count,
                 tier:   s.co2.tier,
                 target: s.co2.target ?? 0.04,
+                repairPct:  s.co2.repairPct ?? 100,
+                juryRigged: s.co2.juryRigged ?? false,
+                destroyed:  s.co2.destroyed ?? false,
             },
             battery: {
                 currentWh:  s.power.current,
@@ -68,6 +74,9 @@ class GameState {
             },
             generator: {
                 active: s.power.active,
+                repairPct:  s.power.repairPct ?? 100,
+                juryRigged: s.power.juryRigged ?? false,
+                destroyed:  s.power.destroyed ?? false,
             },
             fuel: {
                 currentL:  s.fuel.current,
@@ -77,6 +86,7 @@ class GameState {
 
         if (idx >= 0) {
             instances.ships[idx].systemState = systemState;
+            instances.ships[idx].repairQueue = game.repairQueue ?? [];
         }
         return instances;
     }
@@ -111,6 +121,7 @@ class GameState {
                 game.shipName         = inst.name;
                 game.shipRegistration = inst.registration;
             }
+            game.repairQueue = inst?.repairQueue ?? [];
         }
     }
 
@@ -122,11 +133,17 @@ class GameState {
         game.systems.o2.count  = s.o2Generator.count;
         game.systems.o2.tier   = s.o2Generator.tier;
         game.systems.o2.target = s.o2Generator.target ?? 21.0;
+        game.systems.o2.repairPct  = s.o2Generator.repairPct ?? 100;
+        game.systems.o2.juryRigged = s.o2Generator.juryRigged ?? false;
+        game.systems.o2.destroyed  = s.o2Generator.destroyed ?? false;
 
         game.systems.co2.active  = s.co2Scrubber.active;
         game.systems.co2.count   = s.co2Scrubber.count;
         game.systems.co2.tier    = s.co2Scrubber.tier;
         game.systems.co2.target  = s.co2Scrubber.target ?? 0.04;
+        game.systems.co2.repairPct  = s.co2Scrubber.repairPct ?? 100;
+        game.systems.co2.juryRigged = s.co2Scrubber.juryRigged ?? false;
+        game.systems.co2.destroyed  = s.co2Scrubber.destroyed ?? false;
 
         game.systems.power.current  = s.battery.currentWh;
         game.systems.power.capacity = s.battery.capacityWh;
@@ -135,6 +152,9 @@ class GameState {
         game.systems.power.active   = s.generator.active;
         game.systems.power.level    = (s.battery.currentWh / s.battery.capacityWh) * 100;
         game.systems.power.target   = s.battery.target ?? 80.0;
+        game.systems.power.repairPct  = s.generator.repairPct ?? 100;
+        game.systems.power.juryRigged = s.generator.juryRigged ?? false;
+        game.systems.power.destroyed  = s.generator.destroyed ?? false;
 
         game.systems.fuel.current  = s.fuel.currentL;
         game.systems.fuel.capacity = s.fuel.capacityL;
@@ -172,6 +192,12 @@ class GameState {
         game.systems.fuel.level    = (s.fuel.currentL / s.fuel.capacityL) * 100;
         game.inBreathableAtmosphere = snap.environment?.inBreathableAtmosphere ?? false;
         game.ventsOpen              = snap.environment?.ventsOpen              ?? false;
+
+        // Legacy saves predate repair state — start fresh.
+        game.systems.o2.repairPct    = 100; game.systems.o2.juryRigged    = false; game.systems.o2.destroyed    = false;
+        game.systems.co2.repairPct   = 100; game.systems.co2.juryRigged   = false; game.systems.co2.destroyed   = false;
+        game.systems.power.repairPct = 100; game.systems.power.juryRigged = false; game.systems.power.destroyed = false;
+        game.repairQueue = [];
     }
 
     // ── Server-side save (requires: node server.js) ───────────────────────
@@ -235,12 +261,16 @@ class GameState {
         const s    = game.systems;
         snap.shipSystemState = {
             atmosphere:  { o2Pct: s.o2.pct, co2Pct: s.co2.pct },
-            o2Generator: { active: s.o2.active, count: s.o2.count, tier: s.o2.tier, target: s.o2.target ?? 21.0 },
-            co2Scrubber: { active: s.co2.active, count: s.co2.count, tier: s.co2.tier, target: s.co2.target ?? 0.04 },
+            o2Generator: { active: s.o2.active, count: s.o2.count, tier: s.o2.tier, target: s.o2.target ?? 21.0,
+                           repairPct: s.o2.repairPct ?? 100, juryRigged: s.o2.juryRigged ?? false, destroyed: s.o2.destroyed ?? false },
+            co2Scrubber: { active: s.co2.active, count: s.co2.count, tier: s.co2.tier, target: s.co2.target ?? 0.04,
+                           repairPct: s.co2.repairPct ?? 100, juryRigged: s.co2.juryRigged ?? false, destroyed: s.co2.destroyed ?? false },
             battery:     { currentWh: s.power.current, capacityWh: s.power.capacity, count: s.power.count, tier: s.power.tier, target: s.power.target ?? 80.0 },
-            generator:   { active: s.power.active },
+            generator:   { active: s.power.active,
+                           repairPct: s.power.repairPct ?? 100, juryRigged: s.power.juryRigged ?? false, destroyed: s.power.destroyed ?? false },
             fuel:        { currentL: s.fuel.current, capacityL: s.fuel.capacity },
         };
+        snap.repairQueue = game.repairQueue ?? [];
 
         const day  = Math.floor(snap.world.gameTime / 86400) + 1;
         const json = JSON.stringify(snap, null, 2);
@@ -266,7 +296,7 @@ class GameState {
                     const snap = JSON.parse(ev.target.result);
                     // Exported files embed ship system state directly
                     const pseudoInstances = snap.shipSystemState
-                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState }] }
+                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState, repairQueue: snap.repairQueue ?? [] }] }
                         : null;
                     GameState.restore(game, snap, pseudoInstances);
                     onDone(null);

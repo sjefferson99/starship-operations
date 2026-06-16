@@ -455,3 +455,178 @@
     color: #455a64;
     border-top: 1px solid rgba(0, 150, 255, 0.15);
 }
+
+/* ── Repair panel (per-card module health + repair action) ── */
+.repair-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.repair-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.78rem;
+}
+.repair-pct { color: #90a4ae; font-weight: 600; }
+.repair-status { color: #ffa726; font-style: italic; }
+.repair-track {
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.3);
+    overflow: hidden;
+}
+.repair-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.6s ease, background 0.3s ease;
+}
+.repair-good      { background: #2e7d32; }
+.repair-degraded   { background: #ffa726; }
+.repair-major      { background: #ef5350; }
+.repair-critical   { background: #b71c1c; }
+.repair-destroyed  { background: #37474f; }
+.repair-btn {
+    align-self: flex-start;
+    padding: 5px 14px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 167, 38, 0.5);
+    background: rgba(255, 167, 38, 0.15);
+    color: #ffa726;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.repair-btn:hover {
+    background: rgba(255, 167, 38, 0.3);
+    box-shadow: 0 0 10px rgba(255, 167, 38, 0.35);
+}
+
+/* ── Repair queue header button ── */
+.repair-queue-btn {
+    padding: 5px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border-radius: 16px;
+    background: rgba(0, 114, 255, 0.18);
+    color: #64b5f6;
+    border: 1px solid rgba(0, 114, 255, 0.35);
+}
+.repair-queue-btn:hover {
+    background: rgba(0, 114, 255, 0.32);
+    transform: none;
+    box-shadow: 0 0 10px rgba(0, 114, 255, 0.3);
+}
+
+/* ── Task queue screen — full-screen scrim + centred card (mirrors .pause-menu) ── */
+.task-queue-screen {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 12, 35, 0.60);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.task-queue-card {
+    width: 90%;
+    max-width: 560px;
+    max-height: 80vh;
+    background: rgba(8, 15, 40, 0.97);
+    border-radius: 18px;
+    padding: 28px 32px;
+    border: 1px solid rgba(0, 150, 255, 0.35);
+    box-shadow: 0 0 60px rgba(0, 150, 255, 0.25);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.task-queue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.task-queue-header h2 {
+    color: #4fc3f7;
+    font-size: 1.4rem;
+    letter-spacing: 1px;
+}
+.task-queue-close-btn {
+    background: none;
+    border: none;
+    color: #78909c;
+    font-size: 1.6rem;
+    line-height: 1;
+    padding: 0 6px;
+    cursor: pointer;
+}
+.task-queue-close-btn:hover { color: #e0f7fa; transform: none; box-shadow: none; }
+.repair-crew-status {
+    font-size: 0.8rem;
+    color: #90a4ae;
+}
+.task-queue-list {
+    list-style: none;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.task-empty {
+    color: #546e7a;
+    font-style: italic;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 12px 0;
+}
+.task-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(0, 150, 255, 0.18);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: grab;
+}
+.task-card.dragging {
+    opacity: 0.4;
+}
+.task-drag-handle {
+    color: #546e7a;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+.task-info { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.task-title { font-size: 0.85rem; color: #e0f7fa; font-weight: 600; }
+.task-progress-track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+.task-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #00c6ff, #0072ff);
+}
+.task-meta { font-size: 0.7rem; color: #78909c; }
+.task-cancel-btn {
+    padding: 4px 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border-radius: 14px;
+    background: rgba(244, 67, 54, 0.18);
+    color: #ef5350;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.task-cancel-btn:hover {
+    background: rgba(244, 67, 54, 0.32);
+    transform: none;
+    box-shadow: 0 0 10px rgba(244, 67, 54, 0.3);
+}

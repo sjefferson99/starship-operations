@@ -22,16 +22,23 @@ class StarshipGame {
 
         this.systems = this._defaultSystems();
 
-        this.launchScreen  = document.getElementById('launch-screen');
-        this.gameContainer = document.getElementById('game-container');
-        this.pauseMenu     = document.getElementById('pause-menu');
-        this.introModal    = document.getElementById('intro-modal');
+        // Repair state
+        this.repairQueue   = [];
+        this.moduleSpecs   = null; // populated from data/module_specs.json
+        this.crewManifest  = [];   // populated from data/crew_manifest.json
+
+        this.launchScreen   = document.getElementById('launch-screen');
+        this.gameContainer  = document.getElementById('game-container');
+        this.pauseMenu      = document.getElementById('pause-menu');
+        this.introModal     = document.getElementById('intro-modal');
+        this.taskQueueScreen = document.getElementById('task-queue-screen');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
         this.crewElement    = document.getElementById('crew');
 
-        this.systemUpdate = new SystemUpdate(this);
+        this.repairManager = new RepairManager(this);
+        this.systemUpdate   = new SystemUpdate(this);
         this._bindEvents();
         this._loadShipDatabases();
         this.setBackground('space');
@@ -51,12 +58,14 @@ class StarshipGame {
                 count: 1, tier: 1,
                 consumptionLhr: 15.0, generationLhr: 0, ventLhr: 0, netLhr: -15.0,
                 target: 21.0,
+                repairPct: 100, juryRigged: false, destroyed: false,
             },
             co2: {
                 pct: 0.04, status: 'Normal', active: false,
                 count: 1, tier: 1,
                 productionLhr: 12.0, removalLhr: 0, ventLhr: 0, netLhr: 12.0,
                 target: 0.04,
+                repairPct: 100, juryRigged: false, destroyed: false,
             },
             power: {
                 level: 10, status: 'Warning', active: false,
@@ -64,6 +73,7 @@ class StarshipGame {
                 count: 1, tier: 1,
                 genOutputW: 0, o2DrawW: 0, co2DrawW: 0, netWhr: 0,
                 target: 80.0,
+                repairPct: 100, juryRigged: false, destroyed: false,
             },
             fuel: {
                 level: 10, status: 'Warning',
@@ -87,6 +97,13 @@ class StarshipGame {
         document.getElementById('co2-toggle').addEventListener('click',   () => this.toggleSystem('co2'));
         document.getElementById('power-toggle').addEventListener('click', () => this.toggleSystem('power'));
 
+        document.getElementById('o2-repair-btn').addEventListener('click',    () => this.startRepair('o2'));
+        document.getElementById('co2-repair-btn').addEventListener('click',   () => this.startRepair('co2'));
+        document.getElementById('power-repair-btn').addEventListener('click', () => this.startRepair('power'));
+
+        document.getElementById('repair-queue-btn').addEventListener('click',     () => this.toggleTaskQueueScreen());
+        document.getElementById('task-queue-close-btn').addEventListener('click', () => this.toggleTaskQueueScreen());
+
         document.getElementById('vent-toggle').addEventListener('click',  () => this.toggleVents());
 
         document.getElementById('o2-target-input').addEventListener('change', e => {
@@ -102,7 +119,7 @@ class StarshipGame {
             this.systems.power.target = isNaN(v) ? null : v;
         });
 
-        [1, 10, 100].forEach(s =>
+        [1, 10, 100, 1000].forEach(s =>
             document.getElementById(`speed-${s}x`).addEventListener('click', () => this.setGameSpeed(s))
         );
 
@@ -115,10 +132,12 @@ class StarshipGame {
 
     async _loadShipDatabases() {
         try {
-            const [classResp, instanceResp, storyResp] = await Promise.all([
+            const [classResp, instanceResp, storyResp, moduleResp, crewResp] = await Promise.all([
                 fetch('data/ship_classes.json'),
                 fetch('data/ship_instances.json'),
                 fetch('data/story_messages.json'),
+                fetch('data/module_specs.json'),
+                fetch('data/crew_manifest.json'),
             ]);
             if (classResp.ok) {
                 const classDb = await classResp.json();
@@ -134,6 +153,13 @@ class StarshipGame {
             }
             if (storyResp.ok) {
                 this.storyMessages = await storyResp.json();
+            }
+            if (moduleResp.ok) {
+                this.moduleSpecs = await moduleResp.json();
+            }
+            if (crewResp.ok) {
+                const crewDb = await crewResp.json();
+                this.crewManifest = crewDb.crew ?? [];
             }
             this._updateShipIdentityUI();
         } catch { /* offline / file:// mode — fall back to defaults */ }
@@ -220,6 +246,9 @@ class StarshipGame {
         } else {
             this.systems = this._defaultSystems();
         }
+        this.repairQueue = this.shipInstance?.repairQueue
+            ? JSON.parse(JSON.stringify(this.shipInstance.repairQueue))
+            : [];
 
         this._applySpeedUI();
         this._syncTargetInputs();
@@ -273,8 +302,31 @@ class StarshipGame {
 
     toggleSystem(name) {
         if (!this.gameActive || this.gamePaused) return;
+        if (this.systems[name].destroyed) return;
         this.systems[name].active = !this.systems[name].active;
         this.updateDisplay();
+    }
+
+    startRepair(systemKey) {
+        if (!this.gameActive || this.gamePaused) return;
+        this.repairManager.startRepair(systemKey);
+        this.updateDisplay();
+    }
+
+    cancelRepairTask(taskId) {
+        this.repairManager.cancelTask(taskId);
+        this.updateDisplay();
+    }
+
+    reorderRepairQueue(orderedIds) {
+        this.repairManager.reorderTasks(orderedIds);
+        this.updateDisplay();
+    }
+
+    toggleTaskQueueScreen() {
+        const isOpen = this.taskQueueScreen.style.display === 'flex';
+        this.taskQueueScreen.style.display = isOpen ? 'none' : 'flex';
+        if (!isOpen) this._displayRepairQueue();
     }
 
     toggleVents() {
@@ -315,7 +367,7 @@ class StarshipGame {
     }
 
     _applySpeedUI() {
-        [1, 10, 100].forEach(s => {
+        [1, 10, 100, 1000].forEach(s => {
             document.getElementById(`speed-${s}x`).className =
                 'speed-btn' + (s === this.gameSpeed ? ' speed-active' : '');
         });
@@ -355,6 +407,7 @@ class StarshipGame {
         this._displayPower();
         this._displayFuel();
         this._displayEnvironment();
+        this._displayRepairQueue();
     }
 
     _displayO2() {
@@ -387,7 +440,10 @@ class StarshipGame {
         const btn = document.getElementById('o2-toggle');
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
+        btn.disabled     = !!sys.destroyed;
         document.getElementById('card-o2').className = 'system-card' + this._cardMod(sys.status);
+
+        this._displayRepairPanel('o2', 'o2');
     }
 
     _displayCO2() {
@@ -421,7 +477,10 @@ class StarshipGame {
         const btn = document.getElementById('co2-toggle');
         btn.textContent = sys.active ? 'Disable Scrubber' : 'Enable Scrubber';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
+        btn.disabled     = !!sys.destroyed;
         document.getElementById('card-co2').className = 'system-card' + this._cardMod(sys.status);
+
+        this._displayRepairPanel('co2', 'co2');
     }
 
     _displayPower() {
@@ -431,11 +490,11 @@ class StarshipGame {
         document.getElementById('power-indicator').style.left = sys.level.toFixed(1) + '%';
 
         const genEl = document.getElementById('power-gen-output');
-        genEl.textContent = sys.genOutputW + ' W';
+        genEl.textContent = sys.genOutputW.toFixed(2) + ' W';
         genEl.className   = 'rate-value ' + (sys.genOutputW > 0 ? 'rate-pos-good' : '');
 
-        document.getElementById('power-o2-draw').textContent  = sys.o2DrawW  > 0 ? '−' + sys.o2DrawW  + ' W' : '0 W';
-        document.getElementById('power-co2-draw').textContent = sys.co2DrawW > 0 ? '−' + sys.co2DrawW + ' W' : '0 W';
+        document.getElementById('power-o2-draw').textContent  = sys.o2DrawW  > 0 ? '−' + sys.o2DrawW.toFixed(2)  + ' W' : '0.00 W';
+        document.getElementById('power-co2-draw').textContent = sys.co2DrawW > 0 ? '−' + sys.co2DrawW.toFixed(2) + ' W' : '0.00 W';
 
         const netEl = document.getElementById('power-rate');
         netEl.textContent = (sys.netWhr >= 0 ? '+' : '') + sys.netWhr.toFixed(0) + ' Wh/hr';
@@ -448,7 +507,10 @@ class StarshipGame {
         const btn = document.getElementById('power-toggle');
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
+        btn.disabled     = !!sys.destroyed;
         document.getElementById('card-power').className = 'system-card' + this._cardMod(sys.status);
+
+        this._displayRepairPanel('power', 'power');
     }
 
     _displayFuel() {
@@ -482,6 +544,121 @@ class StarshipGame {
         ventLbl.textContent = this.ventsOpen ? 'Vents: OPEN' : 'Vents: CLOSED';
         ventBtn.textContent = this.ventsOpen ? 'Close Vents' : 'Open Vents';
         ventBtn.className   = 'toggle-btn ' + (this.ventsOpen ? 'btn-on' : 'btn-off');
+    }
+
+    // ── Repair UI ───────────────────────────────────────────────────────────
+
+    _repairZoneClass(pct, destroyed) {
+        if (destroyed)  return 'repair-destroyed';
+        if (pct >= 95)  return 'repair-good';
+        if (pct >= 50)  return 'repair-degraded';
+        if (pct >= 20)  return 'repair-major';
+        return 'repair-critical';
+    }
+
+    _displayRepairPanel(systemKey, idPrefix) {
+        const sys = this.systems[systemKey];
+        const pct = sys.repairPct ?? 100;
+
+        const fill = document.getElementById(`${idPrefix}-repair-fill`);
+        if (!fill) return; // markup not present yet
+        fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+        fill.className    = 'repair-fill ' + this._repairZoneClass(pct, sys.destroyed);
+
+        document.getElementById(`${idPrefix}-repair-pct`).textContent =
+            sys.destroyed ? 'DESTROYED' : `Repair: ${pct.toFixed(0)}%` + (sys.juryRigged ? ' (jury-rigged)' : '');
+
+        const task     = this.repairQueue.find(t => t.systemKey === systemKey);
+        const btn       = document.getElementById(`${idPrefix}-repair-btn`);
+        const statusEl  = document.getElementById(`${idPrefix}-repair-status`);
+
+        if (sys.destroyed) {
+            btn.style.display      = 'none';
+            statusEl.style.display = '';
+            statusEl.textContent   = 'Awaiting replacement part';
+        } else if (task) {
+            btn.style.display      = 'none';
+            statusEl.style.display = '';
+            statusEl.textContent   = `${task.status === 'in-progress' ? 'Repairing' : 'Queued'} (${task.band}) — ${task.hoursRemaining.toFixed(1)}h left`;
+        } else if (pct >= 95) {
+            btn.style.display      = 'none';
+            statusEl.style.display = 'none';
+        } else {
+            const info = this.repairManager.describeRepair(systemKey);
+            btn.style.display      = '';
+            statusEl.style.display = 'none';
+            btn.textContent = info.band === 'replacement'
+                ? `Replace (${info.hours}h, 50% cap, ${Math.round(info.destroyChance * 100)}% destroy risk)`
+                : `Repair — ${info.band === 'major' ? 'Major' : 'Minor'} (${info.hours}h)`;
+        }
+    }
+
+    _displayRepairQueue() {
+        const listEl = document.getElementById('repair-queue-list');
+        if (!listEl || this._isDraggingTask) return; // markup not present yet, or mid-drag
+
+        const onShift        = this.repairManager.crewOnShift();
+        const totalEngineers = this.crewManifest.filter(c => c.classes.includes('engineering')).length;
+        const nextChange     = this.repairManager.nextShiftChangeHour();
+        const crewStatusEl   = document.getElementById('repair-crew-status');
+        if (crewStatusEl) {
+            const nextStr = nextChange != null
+                ? ` — next shift change ${String(Math.floor(nextChange)).padStart(2, '0')}:${String(Math.round((nextChange % 1) * 60)).padStart(2, '0')}`
+                : '';
+            crewStatusEl.textContent = `Engineering on duty: ${onShift.length}/${totalEngineers}${nextStr}`;
+        }
+
+        const labelFor = { o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator' };
+
+        if (!this.repairQueue.length) {
+            listEl.innerHTML = '<li class="task-empty">No repair tasks queued.</li>';
+            return;
+        }
+
+        listEl.innerHTML = this.repairQueue.map(task => {
+            const progressPct = Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours)));
+            return `
+                <li class="task-card" draggable="true" data-task-id="${task.id}">
+                    <span class="task-drag-handle">&#10495;</span>
+                    <div class="task-info">
+                        <div class="task-title">${labelFor[task.systemKey] ?? task.systemKey} &mdash; ${task.band}</div>
+                        <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
+                        <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${task.totalHours}h</div>
+                    </div>
+                    <button class="task-cancel-btn" data-task-id="${task.id}">Cancel</button>
+                </li>`;
+        }).join('');
+
+        listEl.querySelectorAll('.task-cancel-btn').forEach(btn =>
+            btn.addEventListener('click', () => this.cancelRepairTask(btn.dataset.taskId))
+        );
+
+        this._bindDragReorder(listEl);
+    }
+
+    _bindDragReorder(listEl) {
+        let dragEl = null;
+        listEl.querySelectorAll('.task-card').forEach(li => {
+            li.addEventListener('dragstart', () => { dragEl = li; this._isDraggingTask = true; li.classList.add('dragging'); });
+            li.addEventListener('dragend', () => {
+                if (dragEl) dragEl.classList.remove('dragging');
+                dragEl = null;
+                this._isDraggingTask = false;
+                this._commitQueueOrder(listEl);
+            });
+            li.addEventListener('dragover', e => {
+                e.preventDefault();
+                if (!dragEl || dragEl === li) return;
+                const rect   = li.getBoundingClientRect();
+                const before = (e.clientY - rect.top) < rect.height / 2;
+                li.parentNode.insertBefore(dragEl, before ? li : li.nextSibling);
+            });
+        });
+    }
+
+    _commitQueueOrder(listEl) {
+        const orderedIds = [...listEl.querySelectorAll('.task-card')].map(li => li.dataset.taskId);
+        this.repairManager.reorderTasks(orderedIds);
     }
 
     // ── Projections ─────────────────────────────────────────────────────────
@@ -620,4 +797,5 @@ class StarshipGame {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => { new StarshipGame(); });
+// Exposed on window so e2e tests (see tests/) can inspect/drive game state directly.
+document.addEventListener('DOMContentLoaded', () => { window.game = new StarshipGame(); });
