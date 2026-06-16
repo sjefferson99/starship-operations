@@ -97,12 +97,14 @@ class SystemUpdate {
         const efficiency    = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
         const maxScrLhr     = ratedLhr * sys.count * efficiency;
 
+        // Ambient/outside CO2 level — vents equalise the cabin toward this, not toward 0.
+        const CO2_AMBIENT = 0.04;
+
         // Vent computed first
         let ventLhr = 0; // positive = removing CO2 from cabin
         if (this.game.ventsOpen && this.game.inBreathableAtmosphere) {
-            const CO2_TARGET = 0.04;
             const VENT_DRIFT = 40;
-            const direction  = sys.pct > CO2_TARGET ? 1 : 0;
+            const direction  = sys.pct > CO2_AMBIENT ? 1 : 0;
             ventLhr = productionLhr + direction * VENT_DRIFT;
         }
 
@@ -121,8 +123,13 @@ class SystemUpdate {
 
         const netLhr   = productionLhr - removalLhr - ventLhr;
         const deltaPct = (netLhr * dt) / (this.SHIP_VOLUME_L * 36);
+        let newPct = sys.pct + deltaPct;
 
-        sys.pct = Math.max(0, Math.min(10, sys.pct + deltaPct));
+        // A large tick (high game speed) shouldn't overshoot past the ambient level
+        // everything above is pulling toward — snap to it instead of blowing through to 0.
+        if (sys.pct > CO2_AMBIENT && newPct < CO2_AMBIENT) newPct = CO2_AMBIENT;
+
+        sys.pct = Math.max(0, Math.min(10, newPct));
 
         sys.productionLhr = productionLhr;
         sys.removalLhr    = removalLhr;
