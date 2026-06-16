@@ -18,10 +18,14 @@ test.describe('module repair state', () => {
 
         await startNewGame(page);
 
-        await expect(page.locator('#o2-repair-pct')).toHaveText('Repair: 100%');
-        await expect(page.locator('#co2-repair-pct')).toHaveText('Repair: 100%');
-        await expect(page.locator('#power-repair-pct')).toHaveText('Repair: 100%');
-        await expect(page.locator('#o2-repair-btn')).toBeHidden();
+        // The starting ship (data/ship_instances.json) begins all three modules at 25%
+        // repair — a beat-up salvage ship per the intro backstory — which falls in the
+        // "major" band (20-50%).
+        await expect(page.locator('#o2-repair-pct')).toHaveText('Repair: 25%');
+        await expect(page.locator('#co2-repair-pct')).toHaveText('Repair: 25%');
+        await expect(page.locator('#power-repair-pct')).toHaveText('Repair: 25%');
+        await expect(page.locator('#o2-repair-btn')).toBeVisible();
+        await expect(page.locator('#o2-repair-btn')).toHaveText('Repair — Major (10h)');
 
         expect(errors).toEqual([]);
     });

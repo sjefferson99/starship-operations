@@ -3,6 +3,7 @@ class StarshipGame {
         this.gameActive = false;
         this.gamePaused = false;
         this.timer      = null;
+        this.autosaveTimer = null;
         this.credits    = 1000;
         this.crew       = 1;
         this.gameTime   = 0;
@@ -58,14 +59,14 @@ class StarshipGame {
                 count: 1, tier: 1,
                 consumptionLhr: 15.0, generationLhr: 0, ventLhr: 0, netLhr: -15.0,
                 target: 21.0,
-                repairPct: 100, juryRigged: false, destroyed: false,
+                repairPct: 25, juryRigged: false, destroyed: false,
             },
             co2: {
                 pct: 0.04, status: 'Normal', active: false,
                 count: 1, tier: 1,
                 productionLhr: 12.0, removalLhr: 0, ventLhr: 0, netLhr: 12.0,
                 target: 0.04,
-                repairPct: 100, juryRigged: false, destroyed: false,
+                repairPct: 25, juryRigged: false, destroyed: false,
             },
             power: {
                 level: 10, status: 'Warning', active: false,
@@ -73,7 +74,7 @@ class StarshipGame {
                 count: 1, tier: 1,
                 genOutputW: 0, o2DrawW: 0, co2DrawW: 0, netWhr: 0,
                 target: 80.0,
-                repairPct: 100, juryRigged: false, destroyed: false,
+                repairPct: 25, juryRigged: false, destroyed: false,
             },
             fuel: {
                 level: 10, status: 'Warning',
@@ -162,6 +163,7 @@ class StarshipGame {
                 this.crewManifest = crewDb.crew ?? [];
             }
             this._updateShipIdentityUI();
+            this.updateDisplay(); // refresh repair panels now that module_specs.json has landed
         } catch { /* offline / file:// mode — fall back to defaults */ }
     }
 
@@ -256,6 +258,7 @@ class StarshipGame {
         this.launchScreen.style.display  = 'none';
         this.gameContainer.style.display = 'block';
         this._startTimer();
+        this._startAutosaveTimer();
         this.updateDisplay();
     }
 
@@ -275,6 +278,7 @@ class StarshipGame {
             this.launchScreen.style.display  = 'none';
             this.gameContainer.style.display = 'block';
             this._startTimer();
+            this._startAutosaveTimer();
             this.updateDisplay();
         } catch (e) { alert('Could not load save: ' + e.message); }
     }
@@ -282,6 +286,7 @@ class StarshipGame {
     quitGame() {
         if (confirm('Quit to main menu?')) {
             this._stopTimer();
+            this._stopAutosaveTimer();
             this.gameActive = false;
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
@@ -292,6 +297,7 @@ class StarshipGame {
 
     endGame() {
         this._stopTimer();
+        this._stopAutosaveTimer();
         this.gameActive = false;
         const o2 = this.systems.o2, co2 = this.systems.co2;
         const reason = o2.pct <= 0              ? 'Oxygen depleted — crew asphyxiated.'
@@ -350,9 +356,19 @@ class StarshipGame {
         }
     }
 
+    async _autosave() {
+        try {
+            await GameState.saveServer(this);
+            this._showSaveStatus('Autosaved');
+        } catch (e) {
+            this._showSaveStatus('Autosave failed — is server.js running?', true);
+        }
+    }
+
     returnToMainMenu() {
         if (confirm('Return to main menu? Unsaved progress will be lost.')) {
             this._stopTimer();
+            this._stopAutosaveTimer();
             this.gameActive = false;
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
@@ -383,6 +399,18 @@ class StarshipGame {
             this.systemUpdate.update(this.gameSpeed);
             this.updateDisplay();
         }, 1000);
+    }
+
+    _startAutosaveTimer() {
+        this._stopAutosaveTimer();
+        this.autosaveTimer = setInterval(() => {
+            if (!this.gameActive) return;
+            this._autosave();
+        }, 5 * 60 * 1000); // real-world 5 minutes, independent of game speed
+    }
+
+    _stopAutosaveTimer() {
+        if (this.autosaveTimer) { clearInterval(this.autosaveTimer); this.autosaveTimer = null; }
     }
 
     _stopTimer() {
@@ -585,6 +613,7 @@ class StarshipGame {
             statusEl.style.display = 'none';
         } else {
             const info = this.repairManager.describeRepair(systemKey);
+            if (!info) { btn.style.display = 'none'; statusEl.style.display = 'none'; return; } // module_specs.json still loading
             btn.style.display      = '';
             statusEl.style.display = 'none';
             btn.textContent = info.band === 'replacement'

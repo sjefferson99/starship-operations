@@ -11,15 +11,15 @@
       "history": "Purchased for 850 credits from Harlow's Salvage, Port Carrow, Kel Veth III. Previous registration to one J. Harwick, last known address: Bay 9 transient berths. Transfer paperwork was never filed. Heat shield patch on port ventral is original Pell-Dyne adhesive from 2251.",
       "systemState": {
         "atmosphere": {
-          "o2Pct": 21.0,
+          "o2Pct": 21.00005208333208,
           "co2Pct": 0.04
         },
         "o2Generator": {
           "active": false,
           "count": 1,
           "tier": 1,
-          "target": 21.0,
-          "repairPct": 100,
+          "target": 21,
+          "repairPct": 25,
           "juryRigged": false,
           "destroyed": false
         },
@@ -28,7 +28,7 @@
           "count": 1,
           "tier": 1,
           "target": 0.04,
-          "repairPct": 100,
+          "repairPct": 25,
           "juryRigged": false,
           "destroyed": false
         },
@@ -37,11 +37,11 @@
           "capacityWh": 1000,
           "count": 1,
           "tier": 1,
-          "target": 80.0
+          "target": 100
         },
         "generator": {
           "active": false,
-          "repairPct": 100,
+          "repairPct": 25,
           "juryRigged": false,
           "destroyed": false
         },
@@ -50,7 +50,16 @@
           "capacityL": 100
         }
       },
-      "repairQueue": []
+      "repairQueue": [
+        {
+          "id": "task-1781652588534-kia6pe",
+          "systemKey": "power",
+          "band": "major",
+          "totalHours": 14,
+          "hoursRemaining": 14,
+          "status": "queued"
+        }
+      ]
     }
   ]
 }
