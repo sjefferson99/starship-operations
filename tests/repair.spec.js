@@ -2,13 +2,7 @@
 // shift gating. Drives the real dashboard in a browser via window.game
 // (exposed for tests in main.js) rather than re-implementing the logic.
 const { test, expect } = require('@playwright/test');
-
-async function startNewGame(page) {
-    await page.goto('/');
-    await page.click('#new-game-btn');
-    await page.click('#intro-continue-btn');
-    await page.waitForSelector('#game-container', { state: 'visible' });
-}
+const { startNewGame } = require('./helpers.js');
 
 test.describe('module repair state', () => {
     test('dashboard loads without console errors and shows full repair panels', async ({ page }) => {
@@ -18,9 +12,9 @@ test.describe('module repair state', () => {
 
         await startNewGame(page);
 
-        // The starting ship (data/ship_instances.json) begins all three modules at 25%
-        // repair — a beat-up salvage ship per the intro backstory — which falls in the
-        // "major" band (20-50%).
+        // New Game always starts from _defaultSystems() now (no resuming from a
+        // prior save) — all three modules begin at 25% repair, a beat-up salvage
+        // ship per the intro backstory, which falls in the "major" band (20-50%).
         await expect(page.locator('#o2-repair-pct')).toHaveText('Repair: 25%');
         await expect(page.locator('#co2-repair-pct')).toHaveText('Repair: 25%');
         await expect(page.locator('#power-repair-pct')).toHaveText('Repair: 25%');

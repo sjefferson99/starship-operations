@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-- **Run the app**: `node server.js` (or `npm start`) → http://localhost:3001. No build step — it's static files served as-is.
-- **Run tests**: `npm test` (runs `playwright test`, which auto-starts `node server.js` for the duration of the run).
+- **Run the app**: `node --no-warnings server.js` (or `npm start`) → http://localhost:3001. No build step — client is static files served as-is. The `--no-warnings` flag suppresses `node:sqlite`'s experimental-feature warning.
+- **Run tests**: `npm test` (runs `playwright test`, which auto-starts `node server.js` against an isolated `test-results/test-game.db` via `GAME_DB_PATH` — never the real `savegame/game.db`).
 - **Run a single test**: `npx playwright test -g "<test name substring>"` or `npx playwright test tests/<file>.spec.js`.
 - **No lint/typecheck configured.**
 
@@ -32,12 +32,23 @@ as 1000 at high speed, any new per-tick calculation needs to be safe against one
 see the CO2-vent-overshoot fix in `system_update.js` for the pattern (clamp to the equilibrium
 target instead of letting a big tick blow through it).
 
-**Persistence is a two-file split**, both served by `server.js` (plain Node `http`, no
-framework): `savegame/save.json` holds world state (time/credits/speed), `data/ship_instances.json`
-holds the ship's live system state + repair queue. `GameState.saveServer`/`loadServer` POST/GET
-both via `/api/save` and `/api/ship-instances` as two independent requests — there's no
-transaction across them. Static reference data (`ship_classes.json`, `module_specs.json`,
-`crew_manifest.json`, `story_messages.json`) is fetched read-only and never written by the server.
+**Saves are named slots, not one implicit save.** New Game always starts from pure
+`_defaultSystems()` defaults (never resumes from a prior save) and prompts for a name via a
+native `prompt()`; Load Game shows a list of named saves (`#load-screen`) with Load/Delete per
+row. State lives in SQLite (`savegame/game.db`, via `db.js`, using the built-in `node:sqlite` —
+no npm install required) behind `/api/saves` (list/create), `/api/saves/:id` (get/put/delete).
+Each save's world-state and ship-instance data is written in **one PUT with one transaction**
+(`db.saveSave`) — `GameState.saveServer`/`loadServer` send/receive both halves as a single
+`{world, shipInstances}` payload, not two independent requests (that was the old single-save
+model's gap; it's fixed now, not just deferred). `db.js` is schema-versioned
+(`meta.schema_version` + an ordered `MIGRATIONS` array) — append new migration steps there,
+never edit a shipped one; ship-scoped tables (`ships`, `ship_atmosphere`, `ship_modules`,
+`ship_battery`, `ship_fuel`) all key on `(save_id, ship_id, ...)` since the same `ship_id`
+(`'player-ship-1'`) recurs across every save. Static reference data (`ship_classes.json`,
+`module_specs.json`, `crew_manifest.json`, `story_messages.json`) is untouched by any of
+this — still fetched read-only, never written by the server, deliberately kept as
+hand-editable JSON rather than DB tables. `data/ship_instances.json` and `savegame/save.json`
+(the old single-save flat files) are fully dead — left on disk, never read or written.
 
 **Repair domain logic is isolated in `repair_manager.js`** (`RepairManager`) on purpose, kept
 separate from the physics in `system_update.js`: it owns the decay curve, the crew-shift lookup

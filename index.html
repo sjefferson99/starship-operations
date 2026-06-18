@@ -331,15 +331,27 @@
         </div>
     </div>
 
-    <div id="task-queue-screen" class="task-queue-screen" style="display: none;">
-        <div class="task-queue-card">
-            <div class="task-queue-header">
+    <div id="task-queue-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
                 <h2>Repair Task Queue</h2>
-                <button id="task-queue-close-btn" class="task-queue-close-btn">&times;</button>
+                <button id="task-queue-close-btn" class="overlay-close-btn">&times;</button>
             </div>
             <p class="repair-crew-status" id="repair-crew-status">Engineering on duty: 0/0</p>
-            <ul id="repair-queue-list" class="task-queue-list">
+            <ul id="repair-queue-list" class="overlay-list">
                 <li class="task-empty">No repair tasks queued.</li>
+            </ul>
+        </div>
+    </div>
+
+    <div id="load-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <h2>Load Game</h2>
+                <button id="load-screen-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+            <ul id="save-list" class="overlay-list">
+                <li class="task-empty">No saved games yet.</li>
             </ul>
         </div>
     </div>

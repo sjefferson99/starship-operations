@@ -2,13 +2,7 @@
 // game speed could overshoot the 400ppm ambient target in a single large tick
 // and get stuck near 0% instead of settling back at ambient.
 const { test, expect } = require('@playwright/test');
-
-async function startNewGame(page) {
-    await page.goto('/');
-    await page.click('#new-game-btn');
-    await page.click('#intro-continue-btn');
-    await page.waitForSelector('#game-container', { state: 'visible' });
-}
+const { startNewGame } = require('./helpers.js');
 
 test.describe('atmosphere venting', () => {
     test('CO2 settles at the 400ppm ambient target, not 0, even at a large tick size', async ({ page }) => {

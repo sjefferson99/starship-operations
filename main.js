@@ -14,8 +14,11 @@ class StarshipGame {
         this.shipName         = 'Stray Light';
         this.shipRegistration = 'PDR-4471-K';
         this.shipClass        = null; // populated from ship_classes.json
-        this.shipInstance     = null; // populated from ship_instances.json
         this.storyMessages    = null; // populated from story_messages.json
+
+        // Active save slot (set on New Game / Load Game)
+        this.saveId   = null;
+        this.saveName = null;
 
         // Environment state
         this.inBreathableAtmosphere = true;
@@ -33,6 +36,7 @@ class StarshipGame {
         this.pauseMenu      = document.getElementById('pause-menu');
         this.introModal     = document.getElementById('intro-modal');
         this.taskQueueScreen = document.getElementById('task-queue-screen');
+        this.loadScreen      = document.getElementById('load-screen');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
@@ -85,9 +89,10 @@ class StarshipGame {
     }
 
     _bindEvents() {
-        document.getElementById('new-game-btn').addEventListener('click',  () => this._showIntro());
+        document.getElementById('new-game-btn').addEventListener('click',  () => this._promptNewGame());
         document.getElementById('intro-continue-btn').addEventListener('click', () => this._startFromIntro());
-        document.getElementById('load-game-btn').addEventListener('click', () => this.loadGame());
+        document.getElementById('load-game-btn').addEventListener('click', () => this._openLoadScreen());
+        document.getElementById('load-screen-close-btn').addEventListener('click', () => this._closeLoadScreen());
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
         document.getElementById('save-btn').addEventListener('click',      () => this.saveGame());
@@ -133,9 +138,8 @@ class StarshipGame {
 
     async _loadShipDatabases() {
         try {
-            const [classResp, instanceResp, storyResp, moduleResp, crewResp] = await Promise.all([
+            const [classResp, storyResp, moduleResp, crewResp] = await Promise.all([
                 fetch('data/ship_classes.json'),
-                fetch('data/ship_instances.json'),
                 fetch('data/story_messages.json'),
                 fetch('data/module_specs.json'),
                 fetch('data/crew_manifest.json'),
@@ -143,14 +147,6 @@ class StarshipGame {
             if (classResp.ok) {
                 const classDb = await classResp.json();
                 this.shipClass = classDb.classes?.find(c => c.id === 'vagrant-mk1') ?? null;
-            }
-            if (instanceResp.ok) {
-                const instanceDb = await instanceResp.json();
-                this.shipInstance = instanceDb.ships?.find(s => s.id === this.shipInstanceId) ?? null;
-                if (this.shipInstance) {
-                    this.shipName         = this.shipInstance.name;
-                    this.shipRegistration = this.shipInstance.registration;
-                }
             }
             if (storyResp.ok) {
                 this.storyMessages = await storyResp.json();
@@ -231,6 +227,27 @@ class StarshipGame {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
 
+    // Loops on a native prompt() until a free name is entered or the player cancels.
+    async _promptNewGame() {
+        let name = prompt('Name your save:');
+        while (name !== null) {
+            name = name.trim();
+            if (!name) { name = prompt('Name your save:'); continue; }
+            try {
+                const { id } = await GameState.createSave(name);
+                this.saveId   = id;
+                this.saveName = name;
+                this._showIntro();
+                return;
+            } catch (e) {
+                if (e.nameTaken) { name = prompt(e.message + '\nTry a different name:'); continue; }
+                alert('Could not create a new save: ' + e.message);
+                return;
+            }
+        }
+        // name === null here means the player cancelled — stay on the launch screen.
+    }
+
     startNewGame() {
         this.gameActive             = true;
         this.gamePaused             = false;
@@ -240,17 +257,8 @@ class StarshipGame {
         this.crew                   = 1;
         this.inBreathableAtmosphere = true;
         this.ventsOpen              = false;
-
-        // Load starting system state from ship instance if available
-        if (this.shipInstance?.systemState) {
-            this.systems = this._defaultSystems();
-            GameState._applySystemState(this, this.shipInstance.systemState);
-        } else {
-            this.systems = this._defaultSystems();
-        }
-        this.repairQueue = this.shipInstance?.repairQueue
-            ? JSON.parse(JSON.stringify(this.shipInstance.repairQueue))
-            : [];
+        this.systems                = this._defaultSystems();
+        this.repairQueue            = [];
 
         this._applySpeedUI();
         this._syncTargetInputs();
@@ -260,21 +268,84 @@ class StarshipGame {
         this._startTimer();
         this._startAutosaveTimer();
         this.updateDisplay();
+        this.saveGame(); // persist the freshly-created slot immediately
     }
 
-    async loadGame() {
+    // ── Load screen ─────────────────────────────────────────────────────────
+
+    async _openLoadScreen() {
+        this.launchScreen.style.display = 'none';
+        this.loadScreen.style.display   = 'flex';
+        await this._renderLoadScreen();
+    }
+
+    _closeLoadScreen() {
+        this.loadScreen.style.display   = 'none';
+        this.launchScreen.style.display = 'block';
+    }
+
+    async _renderLoadScreen() {
+        const listEl = document.getElementById('save-list');
+        if (!listEl) return;
+        listEl.innerHTML = '<li class="task-empty">Loading…</li>'; // clear stale rows from a prior render before re-fetching
+
+        let saves;
         try {
-            await GameState.loadServer(this);
+            saves = await GameState.listSaves();
+        } catch (e) {
+            listEl.innerHTML = '<li class="task-empty">Could not load saves — is server.js running?</li>';
+            return;
+        }
+
+        if (!saves.length) {
+            listEl.innerHTML = '<li class="task-empty">No saved games yet.</li>';
+            return;
+        }
+
+        listEl.innerHTML = saves.map(s => `
+            <li class="save-card" data-save-id="${s.id}">
+                <div class="save-info">
+                    <div class="save-title">${this._escapeHtml(s.name)}</div>
+                    <div class="save-meta">Day ${s.day} &middot; ${s.credits ?? 0} credits &middot; saved ${new Date(s.updatedAt).toLocaleString()}</div>
+                </div>
+                <div class="save-actions">
+                    <button class="save-load-btn" data-save-id="${s.id}">Load</button>
+                    <button class="save-delete-btn" data-save-id="${s.id}">Delete</button>
+                </div>
+            </li>`).join('');
+
+        const byId = new Map(saves.map(s => [String(s.id), s]));
+        listEl.querySelectorAll('.save-load-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._loadSave(Number(btn.dataset.saveId), byId.get(btn.dataset.saveId)?.name))
+        );
+        listEl.querySelectorAll('.save-delete-btn').forEach(btn =>
+            btn.addEventListener('click', () => this._deleteSave(Number(btn.dataset.saveId)))
+        );
+    }
+
+    async _deleteSave(id) {
+        if (!confirm('Delete this save? This cannot be undone.')) return;
+        try {
+            await GameState.deleteSave(id);
+            this._renderLoadScreen();
+        } catch (e) {
+            alert('Could not delete save: ' + e.message);
+        }
+    }
+
+    async _loadSave(saveId, saveName) {
+        try {
+            await GameState.loadServer(this, saveId);
+            this.saveId     = saveId;
+            this.saveName   = saveName ?? null;
             this.gameActive = true;
             this.gamePaused = false;
-            // Restore background from save, or fall back to the starting location
-            const savedBg = this.saveData?.background
-                ?? this.storyMessages?.['new-game']?.background
-                ?? 'city';
+            const savedBg = this.storyMessages?.['new-game']?.background ?? 'city';
             this.setBackground(savedBg);
             this._applySpeedUI();
             this._syncTargetInputs();
             this._updateShipIdentityUI();
+            this._closeLoadScreen();
             this.launchScreen.style.display  = 'none';
             this.gameContainer.style.display = 'block';
             this._startTimer();
@@ -288,6 +359,8 @@ class StarshipGame {
             this._stopTimer();
             this._stopAutosaveTimer();
             this.gameActive = false;
+            this.saveId     = null;
+            this.saveName   = null;
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
@@ -350,7 +423,7 @@ class StarshipGame {
     async saveGame() {
         try {
             await GameState.saveServer(this);
-            this._showSaveStatus('Saved to savegame/save.json');
+            this._showSaveStatus('Saved');
         } catch (e) {
             this._showSaveStatus('Save failed — is server.js running?', true);
         }
@@ -370,6 +443,8 @@ class StarshipGame {
             this._stopTimer();
             this._stopAutosaveTimer();
             this.gameActive = false;
+            this.saveId     = null;
+            this.saveName   = null;
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
@@ -823,6 +898,12 @@ class StarshipGame {
 
     _cardMod(status) {
         return status === 'Critical' ? ' card-critical' : status === 'Warning' ? ' card-warning' : '';
+    }
+
+    _escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
     }
 }
 

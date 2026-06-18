@@ -4,7 +4,7 @@
   "private": true,
   "description": "Starship Operations — browser dashboard game",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --no-warnings server.js",
     "test": "playwright test"
   },
   "devDependencies": {

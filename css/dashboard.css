@@ -521,8 +521,10 @@
     box-shadow: 0 0 10px rgba(0, 114, 255, 0.3);
 }
 
-/* ── Task queue screen — full-screen scrim + centred card (mirrors .pause-menu) ── */
-.task-queue-screen {
+/* ── Generic overlay screen — full-screen scrim + centred card (mirrors .pause-menu) ──
+   Shared shell for the task queue and load-game screens; content-specific styles
+   (task cards, save cards, ...) follow below. ── */
+.overlay-screen {
     position: fixed;
     inset: 0;
     background: rgba(5, 12, 35, 0.60);
@@ -531,7 +533,7 @@
     align-items: center;
     justify-content: center;
 }
-.task-queue-card {
+.overlay-card {
     width: 90%;
     max-width: 560px;
     max-height: 80vh;
@@ -544,17 +546,17 @@
     flex-direction: column;
     gap: 14px;
 }
-.task-queue-header {
+.overlay-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
 }
-.task-queue-header h2 {
+.overlay-header h2 {
     color: #4fc3f7;
     font-size: 1.4rem;
     letter-spacing: 1px;
 }
-.task-queue-close-btn {
+.overlay-close-btn {
     background: none;
     border: none;
     color: #78909c;
@@ -563,12 +565,12 @@
     padding: 0 6px;
     cursor: pointer;
 }
-.task-queue-close-btn:hover { color: #e0f7fa; transform: none; box-shadow: none; }
+.overlay-close-btn:hover { color: #e0f7fa; transform: none; box-shadow: none; }
 .repair-crew-status {
     font-size: 0.8rem;
     color: #90a4ae;
 }
-.task-queue-list {
+.overlay-list {
     list-style: none;
     overflow-y: auto;
     display: flex;
@@ -626,6 +628,59 @@
     flex-shrink: 0;
 }
 .task-cancel-btn:hover {
+    background: rgba(244, 67, 54, 0.32);
+    transform: none;
+    box-shadow: 0 0 10px rgba(244, 67, 54, 0.3);
+}
+
+/* ── Save list (Load Game screen) ── */
+.save-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(0, 150, 255, 0.18);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+.save-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.save-title {
+    font-size: 0.9rem;
+    color: #e0f7fa;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.save-meta { font-size: 0.7rem; color: #78909c; }
+.save-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.save-load-btn {
+    padding: 5px 14px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: 16px;
+    background: rgba(0, 198, 255, 0.18);
+    color: #4fc3f7;
+    border: 1px solid rgba(0, 198, 255, 0.4);
+    cursor: pointer;
+}
+.save-load-btn:hover {
+    background: rgba(0, 198, 255, 0.32);
+    transform: none;
+    box-shadow: 0 0 10px rgba(0, 198, 255, 0.3);
+}
+.save-delete-btn {
+    padding: 5px 14px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: 16px;
+    background: rgba(244, 67, 54, 0.18);
+    color: #ef5350;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+    cursor: pointer;
+}
+.save-delete-btn:hover {
     background: rgba(244, 67, 54, 0.32);
     transform: none;
     box-shadow: 0 0 10px rgba(244, 67, 54, 0.3);
