@@ -58,7 +58,8 @@ class RepairManager {
         const hour = this._currentHour();
         return manifest.filter(member =>
             member.classes.includes('engineering') &&
-            member.shifts.some(s => hour >= s.startHour && hour < s.endHour)
+            member.shifts.some(s => hour >= s.startHour && hour < s.endHour) &&
+            this.game.crewManager.isAvailable(member)
         );
     }
 
@@ -137,12 +138,16 @@ class RepairManager {
 
         queue.forEach(t => { t.status = 'queued'; });
 
-        const workerCount = this.crewOnShift().length;
-        const active = queue.slice(0, workerCount);
+        const onShift = this.crewOnShift();
+        const active = queue.slice(0, onShift.length);
         active.forEach(t => { t.status = 'in-progress'; });
 
-        active.forEach(task => {
-            task.hoursRemaining -= dt / 3600;
+        // Each active task is paired with whichever on-shift crew member is
+        // "in" that slot this tick — not a persistent assignment, just who
+        // currently determines that task's progress speed.
+        active.forEach((task, i) => {
+            const factor = this.game.crewManager.effectivenessMultiplier(onShift[i].health);
+            task.hoursRemaining -= (dt / 3600) / factor;
             if (task.hoursRemaining <= 0) {
                 this._completeTask(task);
             }

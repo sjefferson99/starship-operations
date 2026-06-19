@@ -1,8 +1,8 @@
 // E2E coverage for module repair state, the repair task queue, and crew
 // shift gating. Drives the real dashboard in a browser via window.game
 // (exposed for tests in main.js) rather than re-implementing the logic.
-const { test, expect } = require('@playwright/test');
-const { startNewGame } = require('./helpers.js');
+const { expect } = require('@playwright/test');
+const { test, startNewGame } = require('./helpers.js');
 
 test.describe('module repair state', () => {
     test('dashboard loads without console errors and shows full repair panels', async ({ page }) => {

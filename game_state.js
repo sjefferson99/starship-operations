@@ -22,6 +22,15 @@ class GameState {
 
             crew: {
                 count: game.crew,
+                members: (game.crewManifest ?? []).map(m => ({
+                    id: m.id, health: m.health, varianceFactor: m.varianceFactor,
+                    dead: m.dead, shifts: m.shifts,
+                })),
+            },
+
+            comms: {
+                seed: game.commsSeed ?? null,
+                locations: game.commsLocations ?? [],
             },
 
             shipInstanceId: game.shipInstanceId ?? 'player-ship-1',
@@ -85,6 +94,9 @@ class GameState {
         game.credits   = world.world.credits;
         game.gameSpeed = world.world.gameSpeed;
         game.crew      = world.crew.count;
+        game.crewManager.applySavedRoster(world.crew.members ?? []);
+        game.commsSeed      = world.comms?.seed ?? null;
+        game.commsLocations = world.comms?.locations ?? [];
         game.shipInstanceId = world.shipInstanceId ?? 'player-ship-1';
 
         game.inBreathableAtmosphere = world.environment?.inBreathableAtmosphere ?? false;

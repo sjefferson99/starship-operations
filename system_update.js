@@ -35,6 +35,8 @@ class SystemUpdate {
         this._updateO2(dt);
         this._updateCO2(dt);
         this._updatePowerAndFuel(dt);
+        this.game.crewManager.update(dt);
+        this.game.crew = this.game.crewManager.aliveCount();
         this.game.repairManager.decay(dt);
         this.game.repairManager.processQueue(dt);
         this._updateStatuses();
@@ -237,8 +239,10 @@ class SystemUpdate {
         });
     }
 
+    // Game over is crew death only — bad atmosphere/power/fuel readings damage
+    // crew health (CrewManager) rather than ending the game directly.
     _isGameOver() {
-        return this.game.systems.o2.pct <= 0 ||
-               this.game.systems.co2.pct * 10000 >= 10000;
+        const roster = this.game.crewManifest || [];
+        return roster.length > 0 && this.game.crewManager.aliveCount() === 0;
     }
 }

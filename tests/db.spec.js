@@ -72,7 +72,7 @@ test.describe('db.js', () => {
         expect(result.world).toEqual({
             version: '2.0.0', savedAt: result.world.savedAt,
             world: { gameTime: 12345, credits: 980, gameSpeed: 10 },
-            crew: { count: 1 }, shipInstanceId: 'player-ship-1',
+            crew: { count: 1, members: [] }, comms: { seed: null, locations: [] }, shipInstanceId: 'player-ship-1',
             environment: { inBreathableAtmosphere: true, ventsOpen: false },
         });
 
@@ -81,6 +81,49 @@ test.describe('db.js', () => {
         expect(ship.systemState.o2Generator).toEqual({ active: true, count: 1, tier: 1, target: 21.0, repairPct: 80, juryRigged: false, destroyed: false });
         expect(ship.systemState.generator).toEqual({ active: false, count: null, tier: null, target: null, repairPct: 0, juryRigged: true, destroyed: true });
         expect(ship.repairQueue.map(t => t.id)).toEqual(['task-1', 'task-2']);
+    });
+
+    test('crew members round-trip health/shifts/dead, and re-saving fully replaces the roster', () => {
+        const conn = db.initDb(':memory:');
+        const { id } = db.createSave(conn, 'Run A');
+
+        const members = [
+            { id: 'player', health: 62.5, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }] },
+            { id: 'second', health: 0, varianceFactor: 0.85, dead: true, shifts: [] },
+        ];
+        db.saveSave(conn, id, { world: sampleWorld({ crew: { count: 2, members } }), shipInstances: { ships: [] } });
+
+        expect(db.getSave(conn, id).world.crew.members).toEqual(members);
+
+        // Re-saving with a smaller roster should fully replace, not append.
+        const solo = [{ id: 'player', health: 100, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }, { startHour: 14, endHour: 18 }] }];
+        db.saveSave(conn, id, { world: sampleWorld({ crew: { count: 1, members: solo } }), shipInstances: { ships: [] } });
+
+        expect(db.getSave(conn, id).world.crew.members).toEqual(solo);
+    });
+
+    test('comms locations round-trip seed/kind/coordinates, and re-saving fully replaces the roster', () => {
+        const conn = db.initDb(':memory:');
+        const { id } = db.createSave(conn, 'Run A');
+
+        const locations = [
+            { id: 'home', kind: 'home', name: 'Kel Veth III', x: 4.2, y: 7.1, z: 1.9 },
+            { id: 'location-ab12cd', kind: 'location', name: 'Harlow Station', x: 4.9, y: 6.8, z: 2.3 },
+            { id: 'signal-ef34gh', kind: 'signal', name: 'Unidentified Transmission', x: 3.6, y: 7.5, z: 1.2 },
+        ];
+        db.saveSave(conn, id, { world: sampleWorld({ comms: { seed: 123456789, locations } }), shipInstances: { ships: [] } });
+
+        const saved = db.getSave(conn, id).world.comms;
+        expect(saved.seed).toBe(123456789);
+        expect(saved.locations).toEqual(locations);
+
+        // Re-saving with a different roster should fully replace, not append.
+        const resown = [{ id: 'home', kind: 'home', name: 'Kel Veth III', x: 4.2, y: 7.1, z: 1.9 }];
+        db.saveSave(conn, id, { world: sampleWorld({ comms: { seed: 42, locations: resown } }), shipInstances: { ships: [] } });
+
+        const resaved = db.getSave(conn, id).world.comms;
+        expect(resaved.seed).toBe(42);
+        expect(resaved.locations).toEqual(resown);
     });
 
     test('re-saving fully replaces the repair queue rather than appending', () => {

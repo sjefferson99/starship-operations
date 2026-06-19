@@ -1,8 +1,8 @@
 // Regression coverage for the CO2 vent equilibrium bug: opening vents at high
 // game speed could overshoot the 400ppm ambient target in a single large tick
 // and get stuck near 0% instead of settling back at ambient.
-const { test, expect } = require('@playwright/test');
-const { startNewGame } = require('./helpers.js');
+const { expect } = require('@playwright/test');
+const { test, startNewGame } = require('./helpers.js');
 
 test.describe('atmosphere venting', () => {
     test('CO2 settles at the 400ppm ambient target, not 0, even at a large tick size', async ({ page }) => {

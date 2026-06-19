@@ -186,6 +186,39 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Crew health/shifts, persisted per save (not ship-scoped — crew belongs
+    // to the save, same as repair_tasks did before gaining save_id).
+    db => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS crew_members (
+                save_id INTEGER,
+                id TEXT,
+                health REAL,
+                variance_factor REAL,
+                dead INTEGER,
+                shifts TEXT,
+                PRIMARY KEY (save_id, id)
+            );
+        `);
+    },
+    // Comms & Nav: the seeded sector roster (current location + discovered
+    // points of interest), persisted per save like crew_members above.
+    db => {
+        db.exec(`
+            ALTER TABLE saves ADD COLUMN comms_seed INTEGER;
+
+            CREATE TABLE IF NOT EXISTS comms_locations (
+                save_id INTEGER,
+                id TEXT,
+                kind TEXT,
+                name TEXT,
+                x REAL,
+                y REAL,
+                z REAL,
+                PRIMARY KEY (save_id, id)
+            );
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -256,7 +289,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['repair_tasks', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['comms_locations', 'crew_members', 'repair_tasks', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -273,11 +306,23 @@ function getSave(db, saveId) {
     const save = db.prepare('SELECT * FROM saves WHERE id = ?').get(saveId);
     if (!save) return null;
 
+    const crewRows = db.prepare('SELECT * FROM crew_members WHERE save_id = ?').all(saveId);
+    const crewMembers = crewRows.map(r => ({
+        id: r.id, health: r.health, varianceFactor: r.variance_factor,
+        dead: !!r.dead, shifts: JSON.parse(r.shifts ?? '[]'),
+    }));
+
+    const commsRows = db.prepare('SELECT * FROM comms_locations WHERE save_id = ?').all(saveId);
+    const commsLocations = commsRows.map(r => ({
+        id: r.id, kind: r.kind, name: r.name, x: r.x, y: r.y, z: r.z,
+    }));
+
     const world = {
         version: save.version,
         savedAt: save.updated_at,
         world: { gameTime: save.game_time, credits: save.credits, gameSpeed: save.game_speed },
-        crew: { count: save.crew_count },
+        crew: { count: save.crew_count, members: crewMembers },
+        comms: { seed: save.comms_seed, locations: commsLocations },
         shipInstanceId: save.ship_instance_id,
         environment: {
             inBreathableAtmosphere: !!save.in_breathable_atmosphere,
@@ -333,22 +378,45 @@ function saveSave(db, saveId, { world, shipInstances }) {
         db.prepare(`
             UPDATE saves SET
                 updated_at = ?, version = ?, game_time = ?, credits = ?, game_speed = ?,
-                crew_count = ?, ship_instance_id = ?, in_breathable_atmosphere = ?, vents_open = ?
+                crew_count = ?, ship_instance_id = ?, in_breathable_atmosphere = ?, vents_open = ?, comms_seed = ?
             WHERE id = ?
         `).run(
             new Date().toISOString(), world?.version ?? null,
             world?.world?.gameTime ?? null, world?.world?.credits ?? null, world?.world?.gameSpeed ?? null,
             world?.crew?.count ?? null, world?.shipInstanceId ?? null,
             world?.environment?.inBreathableAtmosphere ? 1 : 0, world?.environment?.ventsOpen ? 1 : 0,
+            world?.comms?.seed ?? null,
             saveId
         );
 
         for (const ship of shipInstances?.ships ?? []) _saveOneShip(db, saveId, ship);
+        _saveCrewMembers(db, saveId, world?.crew?.members ?? []);
+        _saveCommsLocations(db, saveId, world?.comms?.locations ?? []);
         db.exec('COMMIT');
     } catch (e) {
         db.exec('ROLLBACK');
         throw e;
     }
+}
+
+function _saveCrewMembers(db, saveId, members) {
+    db.prepare('DELETE FROM crew_members WHERE save_id = ?').run(saveId);
+    members.forEach(m => {
+        db.prepare(`
+            INSERT INTO crew_members (save_id, id, health, variance_factor, dead, shifts)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(saveId, m.id, m.health, m.varianceFactor, m.dead ? 1 : 0, JSON.stringify(m.shifts ?? []));
+    });
+}
+
+function _saveCommsLocations(db, saveId, locations) {
+    db.prepare('DELETE FROM comms_locations WHERE save_id = ?').run(saveId);
+    locations.forEach(loc => {
+        db.prepare(`
+            INSERT INTO comms_locations (save_id, id, kind, name, x, y, z)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(saveId, loc.id, loc.kind, loc.name, loc.x, loc.y, loc.z);
+    });
 }
 
 function _saveOneShip(db, saveId, ship) {

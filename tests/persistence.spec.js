@@ -1,8 +1,8 @@
 // Coverage for the autosave timer lifecycle. The suite runs against an isolated
 // throwaway DB (see playwright.config.js's GAME_DB_PATH), so real saves here never
 // touch the developer's actual savegame/game.db.
-const { test, expect } = require('@playwright/test');
-const { startNewGame } = require('./helpers.js');
+const { expect } = require('@playwright/test');
+const { test, startNewGame } = require('./helpers.js');
 
 test.describe('autosave', () => {
     test('autosave timer starts on new game and stops on return to menu', async ({ page }) => {

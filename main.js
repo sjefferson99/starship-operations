@@ -29,19 +29,33 @@ class StarshipGame {
         // Repair state
         this.repairQueue   = [];
         this.moduleSpecs   = null; // populated from data/module_specs.json
-        this.crewManifest  = [];   // populated from data/crew_manifest.json
+        this.crewManifestTemplate = []; // populated from data/crew_manifest.json — read-only base shifts/classes
+        this.crewManifest  = [];   // live roster: template + health/shifts/variance/dead (CrewManager)
+        this._editingCrewId = null;
+
+        // Comms & Nav: seeded sector roster (current location + discovered points of interest)
+        this.commsSeed      = null;
+        this.commsLocations = [];
+        this._selectedCommsId = null;
+        this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
 
         this.launchScreen   = document.getElementById('launch-screen');
         this.gameContainer  = document.getElementById('game-container');
         this.pauseMenu      = document.getElementById('pause-menu');
+        this.seedScreen      = document.getElementById('seed-screen');
         this.introModal     = document.getElementById('intro-modal');
         this.taskQueueScreen = document.getElementById('task-queue-screen');
         this.loadScreen      = document.getElementById('load-screen');
+        this.crewScreen      = document.getElementById('crew-screen');
+        this.commsNavScreen  = document.getElementById('comms-nav-screen');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
         this.crewElement    = document.getElementById('crew');
+        this.crewStatElement = document.getElementById('crew-stat');
 
+        this.crewManager    = new CrewManager(this);
+        this.commsNav        = new CommsNav(this);
         this.repairManager = new RepairManager(this);
         this.systemUpdate   = new SystemUpdate(this);
         this._bindEvents();
@@ -90,9 +104,17 @@ class StarshipGame {
 
     _bindEvents() {
         document.getElementById('new-game-btn').addEventListener('click',  () => this._promptNewGame());
+        document.getElementById('seed-regenerate-btn').addEventListener('click', () => {
+            document.getElementById('seed-input').value = this.commsNav.rollSeed();
+        });
+        document.getElementById('seed-continue-btn').addEventListener('click', () => this._confirmSeedAndShowIntro());
         document.getElementById('intro-continue-btn').addEventListener('click', () => this._startFromIntro());
         document.getElementById('load-game-btn').addEventListener('click', () => this._openLoadScreen());
         document.getElementById('load-screen-close-btn').addEventListener('click', () => this._closeLoadScreen());
+        document.getElementById('crew-stat').addEventListener('click',          () => this._openCrewScreen());
+        document.getElementById('crew-screen-close-btn').addEventListener('click', () => this._closeCrewScreen());
+        document.getElementById('comms-nav-btn').addEventListener('click',         () => this._openCommsNavScreen());
+        document.getElementById('comms-nav-close-btn').addEventListener('click',   () => this._closeCommsNavScreen());
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
         document.getElementById('save-btn').addEventListener('click',      () => this.saveGame());
@@ -156,7 +178,8 @@ class StarshipGame {
             }
             if (crewResp.ok) {
                 const crewDb = await crewResp.json();
-                this.crewManifest = crewDb.crew ?? [];
+                this.crewManifestTemplate = crewDb.crew ?? [];
+                this.crewManager.syncRoster();
             }
             this._updateShipIdentityUI();
             this.updateDisplay(); // refresh repair panels now that module_specs.json has landed
@@ -237,7 +260,7 @@ class StarshipGame {
                 const { id } = await GameState.createSave(name);
                 this.saveId   = id;
                 this.saveName = name;
-                this._showIntro();
+                this._showSeedScreen();
                 return;
             } catch (e) {
                 if (e.nameTaken) { name = prompt(e.message + '\nTry a different name:'); continue; }
@@ -248,18 +271,35 @@ class StarshipGame {
         // name === null here means the player cancelled — stay on the launch screen.
     }
 
+    _showSeedScreen() {
+        document.getElementById('seed-input').value = this.commsNav.rollSeed();
+        this.launchScreen.style.display = 'none';
+        this.seedScreen.style.display   = 'flex';
+    }
+
+    _confirmSeedAndShowIntro() {
+        const parsed = parseInt(document.getElementById('seed-input').value, 10);
+        this._pendingSeed = Number.isFinite(parsed) && parsed >= 0 ? parsed : this.commsNav.rollSeed();
+        this.seedScreen.style.display = 'none';
+        this._showIntro();
+    }
+
     startNewGame() {
         this.gameActive             = true;
         this.gamePaused             = false;
         this.gameTime               = 0;
         this.gameSpeed              = 1;
         this.credits                = 1000;
-        this.crew                   = 1;
         this.inBreathableAtmosphere = true;
         this.ventsOpen              = false;
         this.systems                = this._defaultSystems();
         this.repairQueue            = [];
+        this.crewManager.resetRoster();
+        this.crew                   = this.crewManager.aliveCount();
+        this.commsNav.generate(this._pendingSeed); // chosen on the seed screen before the intro
+        this._pendingSeed           = null;
 
+        this._resetPauseMenuUI();
         this._applySpeedUI();
         this._syncTargetInputs();
         this._updateShipIdentityUI();
@@ -340,6 +380,7 @@ class StarshipGame {
             this.saveName   = saveName ?? null;
             this.gameActive = true;
             this.gamePaused = false;
+            this._resetPauseMenuUI();
             const savedBg = this.storyMessages?.['new-game']?.background ?? 'city';
             this.setBackground(savedBg);
             this._applySpeedUI();
@@ -372,11 +413,29 @@ class StarshipGame {
         this._stopTimer();
         this._stopAutosaveTimer();
         this.gameActive = false;
-        const o2 = this.systems.o2, co2 = this.systems.co2;
-        const reason = o2.pct <= 0              ? 'Oxygen depleted — crew asphyxiated.'
-                     : co2.pct * 10000 >= 10000 ? 'CO₂ reached lethal levels.'
-                     : 'Mission failed.';
-        alert('GAME OVER\n\n' + reason);
+        this.gamePaused = false;
+
+        document.getElementById('resume-btn').style.display = 'none';
+        const titleEl = document.getElementById('pause-title');
+        titleEl.textContent = 'GAME OVER';
+        titleEl.classList.add('game-over-title');
+        const subtitleEl = document.getElementById('pause-subtitle');
+        subtitleEl.textContent   = 'All crew are dead.';
+        subtitleEl.style.display = '';
+
+        this.pauseMenu.style.display = 'flex';
+    }
+
+    // Pause menu can be left mid-"GAME OVER" from a prior session — restore
+    // its normal pause appearance before a new/loaded game can show it again.
+    _resetPauseMenuUI() {
+        document.getElementById('resume-btn').style.display = '';
+        const titleEl = document.getElementById('pause-title');
+        titleEl.textContent = 'Game Paused';
+        titleEl.classList.remove('game-over-title');
+        const subtitleEl = document.getElementById('pause-subtitle');
+        subtitleEl.textContent   = '';
+        subtitleEl.style.display = 'none';
     }
 
     toggleSystem(name) {
@@ -496,7 +555,7 @@ class StarshipGame {
 
     updateDisplay() {
         this.creditsElement.textContent = this.credits;
-        this.crewElement.textContent    = this.crew;
+        this._displayCrew();
 
         const day      = Math.floor(this.gameTime / 86400) + 1;
         const secInDay = this.gameTime % 86400;
@@ -647,6 +706,273 @@ class StarshipGame {
         ventLbl.textContent = this.ventsOpen ? 'Vents: OPEN' : 'Vents: CLOSED';
         ventBtn.textContent = this.ventsOpen ? 'Close Vents' : 'Open Vents';
         ventBtn.className   = 'toggle-btn ' + (this.ventsOpen ? 'btn-on' : 'btn-off');
+    }
+
+    // ── Crew UI ─────────────────────────────────────────────────────────────
+
+    _displayCrew() {
+        const alive = (this.crewManifest && this.crewManifest.length)
+            ? this.crewManager.aliveCount()
+            : this.crew;
+        this.crewElement.textContent = alive;
+
+        const worst = this.crewManager.worstStatus();
+        this.crewStatElement.className = 'stat stat-clickable' +
+            (worst === 'normal' ? '' : (worst === 'warning' ? ' stat-warning' : ' stat-critical'));
+
+        if (this.crewScreen.style.display === 'flex' && !this._editingCrewId) {
+            this._renderCrewScreen();
+        }
+    }
+
+    _openCrewScreen() {
+        this.crewScreen.style.display = 'flex';
+        this._renderCrewScreen();
+    }
+
+    _closeCrewScreen() {
+        this.crewScreen.style.display = 'none';
+        this._editingCrewId = null;
+    }
+
+    _crewStatusLabel(status) {
+        switch (status) {
+            case 'dead':         return 'Deceased';
+            case 'unconscious':  return 'Unconscious';
+            case 'critical':     return 'Critical';
+            case 'warning':      return 'Warning';
+            default:             return 'Normal';
+        }
+    }
+
+    _healthBarClass(status) {
+        switch (status) {
+            case 'dead':        return 'health-dead';
+            case 'unconscious': return 'health-critical';
+            case 'critical':    return 'health-major';
+            case 'warning':     return 'health-warning';
+            default:            return 'health-good';
+        }
+    }
+
+    _fmtHour(h) {
+        const hh = Math.floor(h);
+        const mm = Math.round((h - hh) * 60);
+        return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+    }
+
+    _renderCrewScreen() {
+        const listEl = document.getElementById('crew-list');
+        if (!listEl) return;
+        const roster = this.crewManifest || [];
+
+        if (!roster.length) {
+            listEl.innerHTML = '<li class="task-empty">No crew aboard.</li>';
+            return;
+        }
+
+        listEl.innerHTML = roster.map((member, idx) => {
+            const status     = this.crewManager.statusFor(member);
+            const editing    = this._editingCrewId === member.id;
+            const shiftsText = member.shifts.map(s => `${this._fmtHour(s.startHour)}&ndash;${this._fmtHour(s.endHour)}`).join(', ') || 'No shifts';
+
+            return `
+                <li class="crew-card" data-crew-id="${member.id}">
+                    <div class="crew-info">
+                        <div class="crew-title">Crew ${idx + 1} <span class="crew-status-label">${this._crewStatusLabel(status)}</span></div>
+                        <div class="task-progress-track crew-health-track"><div class="task-progress-fill ${this._healthBarClass(status)}" style="width:${Math.max(0, member.health)}%"></div></div>
+                        <div class="task-meta">${member.health.toFixed(0)}% health</div>
+                        ${editing ? this._renderShiftEditor(member) : `<div class="task-meta">Shifts: ${shiftsText}</div>`}
+                    </div>
+                    ${editing ? '' : `<button class="crew-edit-btn" data-crew-id="${member.id}" ${member.dead ? 'disabled' : ''}>Edit Shifts</button>`}
+                </li>`;
+        }).join('');
+
+        listEl.querySelectorAll('.crew-edit-btn').forEach(btn =>
+            btn.addEventListener('click', () => { this._editingCrewId = btn.dataset.crewId; this._renderCrewScreen(); })
+        );
+        if (this._editingCrewId) this._bindShiftEditor(listEl);
+    }
+
+    _renderShiftEditor(member) {
+        const rows = member.shifts.map((s, i) => `
+            <div class="shift-edit-row" data-shift-idx="${i}">
+                <input type="number" class="shift-input shift-start" min="0" max="24" step="0.5" value="${s.startHour}">
+                <span>&ndash;</span>
+                <input type="number" class="shift-input shift-end" min="0" max="24" step="0.5" value="${s.endHour}">
+                <button class="shift-remove-btn" data-shift-idx="${i}">&times;</button>
+            </div>`).join('');
+
+        return `
+            <div class="shift-editor" data-crew-id="${member.id}">
+                ${rows}
+                <div class="shift-editor-actions">
+                    <button class="shift-add-btn">+ Add shift</button>
+                    <button class="shift-save-btn">Save</button>
+                    <button class="shift-cancel-btn">Cancel</button>
+                </div>
+            </div>`;
+    }
+
+    _bindShiftEditor(listEl) {
+        const editorEl = listEl.querySelector('.shift-editor');
+        if (!editorEl) return;
+        const member = (this.crewManifest || []).find(m => m.id === editorEl.dataset.crewId);
+        if (!member) return;
+
+        editorEl.querySelector('.shift-add-btn').addEventListener('click', () => {
+            member.shifts.push({ startHour: 0, endHour: 4 });
+            this._renderCrewScreen();
+        });
+        editorEl.querySelectorAll('.shift-remove-btn').forEach(btn =>
+            btn.addEventListener('click', () => {
+                member.shifts.splice(Number(btn.dataset.shiftIdx), 1);
+                this._renderCrewScreen();
+            })
+        );
+        editorEl.querySelector('.shift-save-btn').addEventListener('click', () => this._saveCrewShifts(editorEl, member));
+        editorEl.querySelector('.shift-cancel-btn').addEventListener('click', () => {
+            this._editingCrewId = null;
+            this._renderCrewScreen();
+        });
+    }
+
+    _saveCrewShifts(editorEl, member) {
+        const shifts = [...editorEl.querySelectorAll('.shift-edit-row')].map(row => ({
+            startHour: parseFloat(row.querySelector('.shift-start').value),
+            endHour:   parseFloat(row.querySelector('.shift-end').value),
+        })).filter(s => isFinite(s.startHour) && isFinite(s.endHour) && s.startHour >= 0 && s.endHour <= 24 && s.startHour < s.endHour);
+
+        if (!shifts.length) {
+            alert('Add at least one valid shift (start before end, within 0–24h).');
+            return;
+        }
+
+        member.shifts = shifts;
+        this._editingCrewId = null;
+        this._renderCrewScreen();
+    }
+
+    // ── Comms & Nav UI ─────────────────────────────────────────────────────
+
+    _openCommsNavScreen() {
+        if (!this._selectedCommsId) {
+            const home = this.commsNav.home();
+            if (home) this._selectedCommsId = home.id;
+        }
+        this.commsNavScreen.style.display = 'flex';
+        this._renderCommsNavScreen();
+    }
+
+    _closeCommsNavScreen() {
+        this.commsNavScreen.style.display = 'none';
+    }
+
+    _selectCommsLocation(id) {
+        this._selectedCommsId = id;
+        this._renderCommsNavScreen();
+    }
+
+    _commsKindLabel(kind) {
+        switch (kind) {
+            case 'home':     return 'Current Location';
+            case 'location': return 'Known Location';
+            case 'signal':    return 'Comm Signal';
+            default:          return kind;
+        }
+    }
+
+    _renderCommsNavScreen() {
+        const seedEl = document.getElementById('comms-seed-label');
+        if (seedEl) seedEl.textContent = this.commsSeed != null ? `— Sector Seed: ${this.commsSeed}` : '';
+
+        this._renderCommsLocationList();
+
+        const planeEl = document.getElementById('comms-plane-views');
+        if (planeEl) {
+            planeEl.innerHTML = this._planeSvg('x', 'y', 'Top View (X / Y)') + this._planeSvg('x', 'z', 'Side View (X / Z)');
+            planeEl.querySelectorAll('.comms-marker').forEach(el =>
+                el.addEventListener('click', () => this._selectCommsLocation(el.dataset.commsId))
+            );
+        }
+
+        this._renderCommsDetailsPane();
+    }
+
+    _renderCommsLocationList() {
+        const listEl = document.getElementById('comms-location-list');
+        if (!listEl) return;
+        const locations = this.commsLocations || [];
+
+        if (!locations.length) {
+            listEl.innerHTML = '<li class="task-empty">No charted locations.</li>';
+            return;
+        }
+
+        listEl.innerHTML = locations.map(loc => {
+            const selected = loc.id === this._selectedCommsId;
+            const dist = loc.kind === 'home' ? null : this.commsNav.distanceFromHome(loc);
+            return `
+                <li class="comms-location-card${selected ? ' comms-location-selected' : ''}" data-comms-id="${loc.id}">
+                    <div class="comms-location-name">${loc.name}</div>
+                    <div class="comms-location-kind">${this._commsKindLabel(loc.kind)}</div>
+                    ${dist != null ? `<div class="comms-location-distance">${dist.toFixed(2)} ly</div>` : ''}
+                </li>`;
+        }).join('');
+
+        listEl.querySelectorAll('.comms-location-card').forEach(li =>
+            li.addEventListener('click', () => this._selectCommsLocation(li.dataset.commsId))
+        );
+    }
+
+    _renderCommsDetailsPane() {
+        const paneEl = document.getElementById('comms-details-pane');
+        if (!paneEl) return;
+        const loc = (this.commsLocations || []).find(l => l.id === this._selectedCommsId);
+
+        if (!loc) {
+            paneEl.innerHTML = '<p class="task-empty">Select a location to view details.</p>';
+            return;
+        }
+
+        const distanceLine = loc.kind === 'home'
+            ? 'You are here'
+            : `Distance: ${this.commsNav.distanceFromHome(loc).toFixed(2)} ly`;
+
+        paneEl.innerHTML = `
+            <h3 class="comms-details-title">${loc.name}</h3>
+            <div class="comms-details-kind">${this._commsKindLabel(loc.kind)}</div>
+            <div class="comms-details-coords">XYZ: ${loc.x.toFixed(2)}, ${loc.y.toFixed(2)}, ${loc.z.toFixed(2)}</div>
+            <div class="comms-details-distance">${distanceLine}</div>
+            <div class="comms-details-placeholder">
+                <p class="task-empty">Trade and news services coming soon.</p>
+            </div>`;
+    }
+
+    // Two orthographic plane views stand in for a full 3D render — axis1/axis2
+    // pick which two coordinates to plot, the third is dropped for that view.
+    _planeSvg(axis1, axis2, title) {
+        const gridLines = [];
+        for (let i = 0; i <= 10; i += 2) {
+            gridLines.push(`<line x1="${i}" y1="0" x2="${i}" y2="10" class="comms-grid-line" />`);
+            gridLines.push(`<line x1="0" y1="${i}" x2="10" y2="${i}" class="comms-grid-line" />`);
+        }
+
+        const markers = (this.commsLocations || []).map(loc => {
+            const cx = loc[axis1];
+            const cy = 10 - loc[axis2]; // flip so larger values read "up"
+            const selected = loc.id === this._selectedCommsId;
+            return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${selected ? 0.45 : 0.28}" class="comms-marker comms-marker-${loc.kind}${selected ? ' comms-marker-selected' : ''}" data-comms-id="${loc.id}"></circle>`;
+        }).join('');
+
+        return `
+            <div class="comms-plane">
+                <div class="comms-plane-title">${title}</div>
+                <svg viewBox="-0.5 -0.5 11 11" class="comms-plane-svg">
+                    ${gridLines.join('')}
+                    ${markers}
+                </svg>
+            </div>`;
     }
 
     // ── Repair UI ───────────────────────────────────────────────────────────

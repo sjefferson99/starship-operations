@@ -1,8 +1,8 @@
 // Coverage for named save slots: New Game prompts for a name, Load Game lists
 // saves with previews, saves can be loaded back exactly, deleted, and duplicate
 // names are blocked rather than silently overwritten.
-const { test, expect } = require('@playwright/test');
-const { startNewGame } = require('./helpers.js');
+const { expect } = require('@playwright/test');
+const { test, startNewGame } = require('./helpers.js');
 
 function uniqueName(label) {
     return `${label} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -87,10 +87,12 @@ test.describe('save slots', () => {
             d.accept(dialogMessages.length === 1 ? dupName : retryName);
         });
         await page.click('#new-game-btn');
-        await page.waitForSelector('#intro-modal', { state: 'visible' });
+        await page.waitForSelector('#seed-screen', { state: 'visible' });
 
         expect(dialogMessages.some(m => m.includes('already exists'))).toBe(true);
 
+        await page.click('#seed-continue-btn');
+        await page.waitForSelector('#intro-modal', { state: 'visible' });
         await page.click('#intro-continue-btn');
         await page.waitForSelector('#game-container', { state: 'visible' });
 
