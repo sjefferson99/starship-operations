@@ -70,6 +70,12 @@ class GameState {
             fuel: {
                 currentL: s.fuel.current, capacityL: s.fuel.capacity,
             },
+            water: {
+                freshCurrentL: s.freshWater.current, freshCapacityL: s.freshWater.capacity,
+                rationing: s.freshWater.rationing, freshDepletedHours: s.freshWater.depletedHours ?? 0,
+                rationHours: s.freshWater.rationHours ?? 0,
+                blackLiquidL: s.blackWater.liquidL, blackSolidL: s.blackWater.solidL, blackCapacityL: s.blackWater.capacity,
+            },
         };
 
         return {
@@ -147,6 +153,20 @@ class GameState {
         game.systems.fuel.current  = s.fuel.currentL;
         game.systems.fuel.capacity = s.fuel.capacityL;
         game.systems.fuel.level    = (s.fuel.currentL / s.fuel.capacityL) * 100;
+
+        const water = s.water ?? {};
+        game.systems.freshWater.current       = water.freshCurrentL ?? 50;
+        game.systems.freshWater.capacity      = water.freshCapacityL ?? 500;
+        game.systems.freshWater.rationing     = water.rationing ?? false;
+        game.systems.freshWater.depletedHours = water.freshDepletedHours ?? 0;
+        game.systems.freshWater.rationHours   = water.rationHours ?? 0;
+        game.systems.freshWater.level         = (game.systems.freshWater.current / game.systems.freshWater.capacity) * 100;
+
+        game.systems.blackWater.liquidL  = water.blackLiquidL ?? 0;
+        game.systems.blackWater.solidL   = water.blackSolidL ?? 0;
+        game.systems.blackWater.current  = game.systems.blackWater.liquidL + game.systems.blackWater.solidL;
+        game.systems.blackWater.capacity = water.blackCapacityL ?? 100;
+        game.systems.blackWater.level    = (game.systems.blackWater.current / game.systems.blackWater.capacity) * 100;
     }
 
     // ── Save slots (requires: node server.js) ──────────────────────────────

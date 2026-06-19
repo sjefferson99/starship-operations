@@ -99,6 +99,20 @@ class StarshipGame {
                 capacity: 100, current: 10,
                 consumeRateLhr: 0,
             },
+            freshWater: {
+                level: 10, status: 'Warning',
+                capacity: 500, current: 50,
+                rationing: false,
+                consumeRateLhr: 0,
+                depletedHours: 0,
+                rationHours: 0,
+            },
+            blackWater: {
+                level: 0, status: 'Normal',
+                capacity: 100, current: 0,
+                liquidL: 0, solidL: 0,
+                liquidRateLhr: 0, solidRateLhr: 0, fillRateLhr: 0,
+            },
         };
     }
 
@@ -133,6 +147,9 @@ class StarshipGame {
         document.getElementById('task-queue-close-btn').addEventListener('click', () => this.toggleTaskQueueScreen());
 
         document.getElementById('vent-toggle').addEventListener('click',  () => this.toggleVents());
+
+        document.getElementById('water-ration-toggle').addEventListener('click', () => this.toggleWaterRationing());
+        document.getElementById('blackwater-dump-btn').addEventListener('click', () => this.dumpBlackWater());
 
         document.getElementById('o2-target-input').addEventListener('change', e => {
             const v = parseFloat(e.target.value);
@@ -473,6 +490,55 @@ class StarshipGame {
         this.updateDisplay();
     }
 
+    // Ration toggle: enabling cuts consumption to the conservative rate but,
+    // sustained past a day, starts a slow health drain (CrewManager). Disabling
+    // after that grace period has passed rehydrates the crew with one lump
+    // draw from the tank rather than gradually — see _canAffordRationReset().
+    toggleWaterRationing() {
+        if (!this.gameActive || this.gamePaused) return;
+        const fresh = this.systems.freshWater;
+
+        if (fresh.rationing) {
+            if (fresh.rationHours >= this.crewManager.WATER_RATION_GRACE_HOURS) {
+                if (!this._canAffordRationReset()) return; // also greyed out in the UI
+                const cost = this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
+                fresh.current -= cost;
+                fresh.level    = (fresh.current / fresh.capacity) * 100;
+            }
+            fresh.rationing   = false;
+            fresh.rationHours = 0;
+        } else {
+            fresh.rationing = true;
+        }
+        this.updateDisplay();
+    }
+
+    _canAffordRationReset() {
+        const fresh = this.systems.freshWater;
+        const cost  = this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
+        return fresh.current >= cost;
+    }
+
+    // Manually vent a player-chosen percentage of the black water tank to space —
+    // the only way to relieve the tank until reclamation processing exists.
+    dumpBlackWater() {
+        if (!this.gameActive || this.gamePaused) return;
+        const black = this.systems.blackWater;
+        if (black.current <= 0) return;
+
+        const input = prompt('Dump what percentage of the black water tank? (0-100)', '50');
+        if (input === null) return;
+        const pct = parseFloat(input);
+        if (!isFinite(pct) || pct <= 0) return;
+
+        const fraction = Math.min(100, pct) / 100;
+        black.liquidL *= (1 - fraction);
+        black.solidL  *= (1 - fraction);
+        black.current  = black.liquidL + black.solidL;
+        black.level    = (black.current / black.capacity) * 100;
+        this.updateDisplay();
+    }
+
     togglePause() {
         if (!this.gameActive) return;
         this.gamePaused = !this.gamePaused;
@@ -568,6 +634,8 @@ class StarshipGame {
         this._displayCO2();
         this._displayPower();
         this._displayFuel();
+        this._displayFreshWater();
+        this._displayBlackWater();
         this._displayEnvironment();
         this._displayRepairQueue();
     }
@@ -693,6 +761,74 @@ class StarshipGame {
         document.getElementById('card-fuel').className = 'system-card' + this._cardMod(sys.status);
     }
 
+    _displayFreshWater() {
+        const sys = this.systems.freshWater;
+        document.getElementById('freshwater-level').textContent    = sys.current.toFixed(2) + ' L';
+        document.getElementById('freshwater-capacity').textContent = sys.capacity;
+        document.getElementById('freshwater-indicator').style.left = Math.min(100, sys.level).toFixed(1) + '%';
+        document.getElementById('freshwater-rate').textContent     = '−' + sys.consumeRateLhr.toFixed(3) + ' L/hr';
+
+        const rtEl = document.getElementById('freshwater-runtime');
+        if (sys.current <= 0) {
+            rtEl.textContent = 'EMPTY';
+        } else if (sys.consumeRateLhr > 0) {
+            const hrs = sys.current / sys.consumeRateLhr;
+            rtEl.textContent = hrs >= 240 ? Math.round(hrs / 24) + ' days' : Math.round(hrs) + ' hrs';
+        } else {
+            rtEl.textContent = '—';
+        }
+
+        this._setBadge('freshwater-status-badge', sys.status);
+        document.getElementById('freshwater-mode-status').innerHTML =
+            'Rationing: <strong>' + (sys.rationing ? 'ON' : 'OFF') + '</strong>';
+
+        const toggleBtn = document.getElementById('water-ration-toggle');
+        const graceHours = this.crewManager.WATER_RATION_GRACE_HOURS;
+        const pastGrace  = sys.rationing && sys.rationHours >= graceHours;
+        const canAffordReset = this._canAffordRationReset();
+
+        toggleBtn.textContent = sys.rationing ? 'Disable Rationing' : 'Enable Rationing';
+        toggleBtn.className   = 'toggle-btn ' + (sys.rationing ? 'btn-on' : 'btn-off');
+        toggleBtn.disabled    = pastGrace && !canAffordReset;
+        toggleBtn.title       = (pastGrace && !canAffordReset)
+            ? `Not enough fresh water to come off rationing — needs ${(this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew).toFixed(0)} L`
+            : '';
+
+        const timerRow = document.getElementById('freshwater-ration-timer-row');
+        const timerEl  = document.getElementById('freshwater-ration-timer');
+        if (sys.rationing) {
+            timerRow.style.display = '';
+            const remaining = graceHours - sys.rationHours;
+            if (remaining > 0) {
+                timerEl.textContent = this._fmtHrs(remaining);
+                timerEl.className   = 'rate-value';
+            } else {
+                timerEl.textContent = 'ACTIVE';
+                timerEl.className   = 'rate-value rate-neg';
+            }
+        } else {
+            timerRow.style.display = 'none';
+        }
+
+        document.getElementById('card-freshwater').className = 'system-card' + this._cardMod(sys.status);
+    }
+
+    _displayBlackWater() {
+        const sys = this.systems.blackWater;
+        document.getElementById('blackwater-level').textContent    = sys.current.toFixed(2) + ' L';
+        document.getElementById('blackwater-indicator').style.left = Math.min(100, sys.level).toFixed(1) + '%';
+        document.getElementById('blackwater-liquid').textContent   = sys.liquidL.toFixed(2) + ' L';
+        document.getElementById('blackwater-solid').textContent    = sys.solidL.toFixed(2) + ' L';
+        document.getElementById('blackwater-rate').textContent     = '+' + sys.fillRateLhr.toFixed(3) + ' L/hr';
+
+        this._setBadge('blackwater-status-badge', sys.status);
+        document.getElementById('blackwater-status').innerHTML =
+            'Tank: <strong>' + Math.round(sys.level) + '%</strong> full';
+        const dumpBtn = document.getElementById('blackwater-dump-btn');
+        dumpBtn.disabled = sys.current <= 0;
+        document.getElementById('card-blackwater').className = 'system-card' + this._cardMod(sys.status);
+    }
+
     _displayEnvironment() {
         const dot     = document.getElementById('atmos-dot');
         const label   = document.getElementById('atmos-label');
@@ -761,9 +897,35 @@ class StarshipGame {
         return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
     }
 
+    // Surfaces exactly what CrewManager.update(dt) is currently penalising health
+    // for, and by how much, so the player can tell which system to fix next
+    // instead of guessing from the health bar alone.
+    _renderCrewImpactPanel() {
+        const panelEl = document.getElementById('crew-impact-panel');
+        if (!panelEl) return;
+
+        const items = this.crewManager.healthImpactBreakdown();
+        if (!items.length) {
+            panelEl.innerHTML = '<p class="task-empty">No negative health factors currently active.</p>';
+            return;
+        }
+
+        const rows = items
+            .slice()
+            .sort((a, b) => b.ratePctPerHr - a.ratePctPerHr)
+            .map(item => `
+                <div class="rate-row">
+                    <span class="rate-label">${item.label}</span>
+                    <span class="rate-value rate-neg">&#8722;${item.ratePctPerHr.toFixed(2)}%/hr</span>
+                </div>`).join('');
+
+        panelEl.innerHTML = `<div class="rate-panel">${rows}</div>`;
+    }
+
     _renderCrewScreen() {
         const listEl = document.getElementById('crew-list');
         if (!listEl) return;
+        this._renderCrewImpactPanel();
         const roster = this.crewManifest || [];
 
         if (!roster.length) {

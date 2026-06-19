@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Run the app**: `node --no-warnings server.js` (or `npm start`) → http://localhost:3001. No build step — client is static files served as-is. The `--no-warnings` flag suppresses `node:sqlite`'s experimental-feature warning.
 - **Run tests**: `npm test` (runs `playwright test`, which auto-starts `node server.js` against an isolated `test-results/test-game.db` via `GAME_DB_PATH` — never the real `savegame/game.db`).
+- **Before running tests, check whether a server is already on port 3001** (`netstat -ano | findstr :3001`, or `Get-NetTCPConnection -LocalPort 3001` in PowerShell). `playwright.config.js` sets `reuseExistingServer: !process.env.CI`, so if the user is already running `node server.js` (e.g. manually testing the app before handing you a prompt), `npm test` silently reuses that process instead of starting a fresh one — including whatever DB schema it already loaded in memory at its own startup. Since SQLite migrations in `db.js` only run once per process, at startup, a stale long-running process can mask a real schema/migration bug as a flaky test failure (look for "no such column" in a save's error response). If a process is already listening, don't kill it without asking — it may be the user's own manual test session.
 - **Run a single test**: `npx playwright test -g "<test name substring>"` or `npx playwright test tests/<file>.spec.js`.
 - **No lint/typecheck configured.**
 

@@ -313,6 +313,101 @@
                         <span id="fuel-status">Consumed by power generator</span>
                     </div>
                 </div>
+
+                <!-- Fresh Water Tank -->
+                <div class="system-card" id="card-freshwater">
+                    <div class="card-header">
+                        <h3>Fresh Water</h3>
+                        <span class="status-badge badge-warning" id="freshwater-status-badge">WARNING</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="freshwater-level">50.00 L</span>
+                        <span class="value-label">of <span id="freshwater-capacity">500</span> L remaining</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track resource-zones">
+                            <div class="gauge-indicator" id="freshwater-indicator" style="left: 10%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0%</span>
+                            <span style="left:10%">10%</span>
+                            <span style="left:30%">30%</span>
+                            <span style="left:100%">100%</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-red">&#9632; &lt;10% Critical</span>
+                        <span class="legend-item legend-amber">&#9632; 10-30% Low</span>
+                        <span class="legend-item legend-green">&#9632; &gt;30% Good</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Crew consumption:</span>
+                            <span class="rate-value" id="freshwater-rate">&#8722;0.000 L/hr</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Est. time to empty:</span>
+                            <span class="rate-value" id="freshwater-runtime">&mdash;</span>
+                        </div>
+                        <div class="rate-row" id="freshwater-ration-timer-row" style="display:none">
+                            <span class="rate-label">Health impact in:</span>
+                            <span class="rate-value" id="freshwater-ration-timer">&mdash;</span>
+                        </div>
+                    </div>
+                    <div class="system-controls">
+                        <span id="freshwater-mode-status">Rationing: <strong>OFF</strong></span>
+                        <button id="water-ration-toggle" class="toggle-btn btn-off" title="">Enable Rationing</button>
+                    </div>
+                    <div class="system-info">
+                        <span>Manual top-up only &mdash; no water makers yet</span>
+                    </div>
+                </div>
+
+                <!-- Black Water Tank -->
+                <div class="system-card" id="card-blackwater">
+                    <div class="card-header">
+                        <h3>Black Water</h3>
+                        <span class="status-badge badge-normal" id="blackwater-status-badge">NOMINAL</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="blackwater-level">0.00 L</span>
+                        <span class="value-label">of 100 L capacity</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track resource-zones-inverted">
+                            <div class="gauge-indicator" id="blackwater-indicator" style="left: 0%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0%</span>
+                            <span style="left:70%">70%</span>
+                            <span style="left:90%">90%</span>
+                            <span style="left:100%">100%</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-green">&#9632; &lt;70% Good</span>
+                        <span class="legend-item legend-amber">&#9632; 70-90% Filling</span>
+                        <span class="legend-item legend-red">&#9632; &gt;90% Full</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Liquid waste:</span>
+                            <span class="rate-value" id="blackwater-liquid">0.00 L</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Solid matter:</span>
+                            <span class="rate-value" id="blackwater-solid">0.00 L</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Fill rate:</span>
+                            <span class="rate-value" id="blackwater-rate">+0.000 L/hr</span>
+                        </div>
+                    </div>
+                    <div class="system-controls">
+                        <span id="blackwater-status">Tank: <strong>0%</strong> full</span>
+                        <button id="blackwater-dump-btn" class="toggle-btn btn-off">Dump to Space</button>
+                    </div>
+                </div>
             </div>
 
                 <!-- Environment / Vent Panel -->
@@ -378,6 +473,8 @@
                 <h2>Crew</h2>
                 <button id="crew-screen-close-btn" class="overlay-close-btn">&times;</button>
             </div>
+            <h3 class="crew-impact-title">Active Health Impacts</h3>
+            <div id="crew-impact-panel" class="crew-impact-panel"></div>
             <ul id="crew-list" class="overlay-list">
                 <li class="task-empty">No crew aboard.</li>
             </ul>

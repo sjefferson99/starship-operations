@@ -20,6 +20,15 @@ class SystemUpdate {
         this.CO2_DRAW_W_BY_TIER   = [21];
         this.GEN_OUTPUT_W    = 142;
         this.GEN_FUEL_L_HR   = 0.01;
+
+        // Water usage, per crew member per day — no water makers/processing yet,
+        // so fresh water only ever drains until manually topped up.
+        this.WATER_CONSERVATIVE_L_PER_CREW_DAY = 25;
+        this.WATER_NORMAL_L_PER_CREW_DAY       = 100;
+
+        // Coming off rationing rehydrates the crew with one lump draw, rather
+        // than gradually — see main.js's toggleWaterRationing().
+        this.WATER_RATION_RESET_L_PER_CREW = 50;
     }
 
     // Reads a per-tier numeric field from the loaded module_specs.json,
@@ -35,6 +44,7 @@ class SystemUpdate {
         this._updateO2(dt);
         this._updateCO2(dt);
         this._updatePowerAndFuel(dt);
+        this._updateWater(dt);
         this.game.crewManager.update(dt);
         this.game.crew = this.game.crewManager.aliveCount();
         this.game.repairManager.decay(dt);
@@ -189,6 +199,44 @@ class SystemUpdate {
         fuel.consumeRateLhr = fuelBurnLhr;
     }
 
+    _updateWater(dt) {
+        const fresh = this.game.systems.freshWater;
+        const black = this.game.systems.blackWater;
+        const hours = dt / 3600;
+        const crew  = this.game.crew;
+
+        const dailyRateLPerCrew = fresh.rationing
+            ? this.WATER_CONSERVATIVE_L_PER_CREW_DAY
+            : this.WATER_NORMAL_L_PER_CREW_DAY;
+        const consumeLhr = (dailyRateLPerCrew * crew) / 24;
+        const consumed    = Math.min(fresh.current, consumeLhr * hours);
+
+        fresh.current        = Math.max(0, fresh.current - consumed);
+        fresh.consumeRateLhr = consumeLhr;
+        fresh.level          = (fresh.current / fresh.capacity) * 100;
+        fresh.depletedHours  = fresh.current <= 0 ? (fresh.depletedHours || 0) + hours : 0;
+        fresh.rationHours    = fresh.rationing ? (fresh.rationHours || 0) + hours : 0;
+
+        // 90% of the fresh water actually drawn becomes black-water liquid (10%
+        // lost to drinking/showering/evaporation); that liquid then gains 20%
+        // extra volume from solid waste, tracked separately for the dashboard
+        // split and for future reclamation processing.
+        const liquidProduced = consumed * 0.9;
+        const solidProduced  = liquidProduced * 0.2;
+        const totalProduced  = liquidProduced + solidProduced;
+        const capacityLeft   = Math.max(0, black.capacity - black.current);
+        const overflowRatio  = totalProduced > 0 ? Math.min(1, capacityLeft / totalProduced) : 1;
+
+        black.liquidL = black.liquidL + liquidProduced * overflowRatio;
+        black.solidL  = black.solidL  + solidProduced  * overflowRatio;
+        black.current = black.liquidL + black.solidL;
+        black.level   = (black.current / black.capacity) * 100;
+
+        black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
+        black.solidRateLhr  = black.liquidRateLhr * 0.2;
+        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr;
+    }
+
     _updateStatuses() {
         const o2  = this.game.systems.o2;
         const co2 = this.game.systems.co2;
@@ -228,6 +276,24 @@ class SystemUpdate {
             fuel.status = 'Warning';
         } else {
             fuel.status = 'Normal';
+        }
+
+        const freshWater = this.game.systems.freshWater;
+        if (freshWater.level <= 10) {
+            freshWater.status = 'Critical';
+        } else if (freshWater.level <= 30) {
+            freshWater.status = 'Warning';
+        } else {
+            freshWater.status = 'Normal';
+        }
+
+        const blackWater = this.game.systems.blackWater;
+        if (blackWater.level >= 90) {
+            blackWater.status = 'Critical';
+        } else if (blackWater.level >= 70) {
+            blackWater.status = 'Warning';
+        } else {
+            blackWater.status = 'Normal';
         }
 
         // A destroyed module is offline regardless of any other reading.

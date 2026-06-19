@@ -13,6 +13,18 @@ class CrewManager {
         this.WARNING_THRESHOLD    = 80;
         this.EFFECTIVENESS_K      = 3 / 6400; // timeFactor = 1 + K*(100-health)^2
 
+        // Fresh water deprivation: no health impact for the first 24h the tank
+        // reads empty, then a dedicated decline rate (independent of BASE_RATE_PCT_PER_HR)
+        // calibrated to take a member from full health to 0 over the next 24h.
+        this.WATER_GRACE_HOURS            = 24;
+        this.WATER_DEPRIVATION_PCT_PER_HR = 100 / 24;
+
+        // Rationing trades water savings for a slow health cost: harmless for the
+        // first 24h, then a fraction of the full-dehydration rate. Superseded by
+        // full dehydration above if the tank actually runs dry while rationing.
+        this.WATER_RATION_GRACE_HOURS    = 24;
+        this.WATER_RATION_HEALTH_FRACTION = 0.10;
+
         this._pendingSavedMembers = null; // saved roster received before the template finished loading
     }
 
@@ -94,21 +106,42 @@ class CrewManager {
         return 0.3 + (Math.min(5000, ppm - 5000) / 5000) * 0.7;
     }
 
-    environmentSeverity() {
-        return this._o2Severity() + this._co2Severity();
+    // Single source of truth for "what's currently hurting the crew, and how
+    // much" — feeds both the per-tick health delta below and the crew-screen
+    // breakdown panel, so the two can never drift apart. Each entry's rate is
+    // the decline at varianceFactor 1; update() scales it per member.
+    healthImpactBreakdown() {
+        const items = [];
+
+        const o2Sev  = this._o2Severity();
+        const co2Sev = this._co2Severity();
+        if (o2Sev > 0)  items.push({ label: 'Oxygen deprivation', ratePctPerHr: o2Sev  * this.BASE_RATE_PCT_PER_HR });
+        if (co2Sev > 0) items.push({ label: 'CO2 toxicity',       ratePctPerHr: co2Sev * this.BASE_RATE_PCT_PER_HR });
+
+        const fresh = this.game.systems.freshWater;
+        if (fresh) {
+            if ((fresh.depletedHours || 0) > this.WATER_GRACE_HOURS) {
+                items.push({ label: 'Dehydration (no fresh water)', ratePctPerHr: this.WATER_DEPRIVATION_PCT_PER_HR });
+            } else if (fresh.rationing && (fresh.rationHours || 0) > this.WATER_RATION_GRACE_HOURS) {
+                items.push({ label: 'Water rationing strain', ratePctPerHr: this.WATER_RATION_HEALTH_FRACTION * this.WATER_DEPRIVATION_PCT_PER_HR });
+            }
+        }
+
+        return items;
     }
 
     // ── Health update ───────────────────────────────────────────────────────
 
     update(dt) {
-        const severity = this.environmentSeverity();
         const hours = dt / 3600;
+        const totalDeclineRate = this.healthImpactBreakdown()
+            .reduce((sum, item) => sum + item.ratePctPerHr, 0);
 
         (this.game.crewManifest || []).forEach(member => {
             if (member.dead) return;
 
-            const rate = severity > 0
-                ? -this.BASE_RATE_PCT_PER_HR * severity * member.varianceFactor
+            const rate = totalDeclineRate > 0
+                ? -totalDeclineRate * member.varianceFactor
                 :  this.BASE_RATE_PCT_PER_HR * member.varianceFactor;
 
             member.health = Math.max(0, Math.min(100, member.health + rate * hours));

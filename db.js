@@ -219,6 +219,48 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Fresh/black water tanks — no water makers yet, so fresh only drains and
+    // must be manually topped up; black water accumulates from fresh usage.
+    db => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS ship_water (
+                save_id INTEGER,
+                ship_id TEXT,
+                fresh_current_l REAL,
+                fresh_capacity_l REAL,
+                fresh_conservative_mode INTEGER,
+                fresh_depleted_hours REAL,
+                black_liquid_l REAL,
+                black_solid_l REAL,
+                black_capacity_l REAL,
+                PRIMARY KEY (save_id, ship_id)
+            );
+        `);
+    },
+    // The fresh-water conservative/normal toggle was replaced by a ration
+    // on/off mechanic with its own duration timer — recreated rather than
+    // ALTERed for the same reason migration index 1 recreated its tables:
+    // this is still pre-release dev data, not a real player save worth a
+    // data-preserving migration. Only water state resets; every other table
+    // (crew, atmosphere, modules, repair tasks, comms) is untouched.
+    db => {
+        db.exec(`
+            DROP TABLE IF EXISTS ship_water;
+            CREATE TABLE ship_water (
+                save_id INTEGER,
+                ship_id TEXT,
+                fresh_current_l REAL,
+                fresh_capacity_l REAL,
+                fresh_rationing INTEGER,
+                fresh_depleted_hours REAL,
+                fresh_ration_hours REAL,
+                black_liquid_l REAL,
+                black_solid_l REAL,
+                black_capacity_l REAL,
+                PRIMARY KEY (save_id, ship_id)
+            );
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -289,7 +331,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['comms_locations', 'crew_members', 'repair_tasks', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -342,6 +384,7 @@ function _composeShip(db, saveId, shipRow) {
     const byKey   = Object.fromEntries(modules.map(m => [m.system_key, m]));
     const battery = db.prepare('SELECT * FROM ship_battery WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
     const fuel    = db.prepare('SELECT * FROM ship_fuel WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
+    const water   = db.prepare('SELECT * FROM ship_water WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
     const tasks   = db.prepare('SELECT * FROM repair_tasks WHERE save_id = ? AND ship_id = ? ORDER BY queue_position').all(saveId, shipRow.id);
 
     const moduleState = key => {
@@ -364,6 +407,13 @@ function _composeShip(db, saveId, shipRow) {
             },
             generator: moduleState('generator'),
             fuel: { currentL: fuel.current_l, capacityL: fuel.capacity_l },
+            water: {
+                freshCurrentL: water.fresh_current_l, freshCapacityL: water.fresh_capacity_l,
+                rationing: water.fresh_rationing == null ? null : !!water.fresh_rationing,
+                freshDepletedHours: water.fresh_depleted_hours,
+                rationHours: water.fresh_ration_hours,
+                blackLiquidL: water.black_liquid_l, blackSolidL: water.black_solid_l, blackCapacityL: water.black_capacity_l,
+            },
         },
         repairQueue: tasks.map(t => ({
             id: t.id, systemKey: t.system_key, band: t.band,
@@ -460,6 +510,21 @@ function _saveOneShip(db, saveId, ship) {
         INSERT INTO ship_fuel (save_id, ship_id, current_l, capacity_l) VALUES (?, ?, ?, ?)
         ON CONFLICT(save_id, ship_id) DO UPDATE SET current_l = excluded.current_l, capacity_l = excluded.capacity_l
     `).run(saveId, ship.id, fuel.currentL ?? null, fuel.capacityL ?? null);
+
+    const water = s.water ?? {};
+    db.prepare(`
+        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(save_id, ship_id) DO UPDATE SET
+            fresh_current_l = excluded.fresh_current_l, fresh_capacity_l = excluded.fresh_capacity_l,
+            fresh_rationing = excluded.fresh_rationing, fresh_depleted_hours = excluded.fresh_depleted_hours,
+            fresh_ration_hours = excluded.fresh_ration_hours,
+            black_liquid_l = excluded.black_liquid_l, black_solid_l = excluded.black_solid_l, black_capacity_l = excluded.black_capacity_l
+    `).run(
+        saveId, ship.id, water.freshCurrentL ?? null, water.freshCapacityL ?? null,
+        water.rationing ? 1 : 0, water.freshDepletedHours ?? null, water.rationHours ?? null,
+        water.blackLiquidL ?? null, water.blackSolidL ?? null, water.blackCapacityL ?? null
+    );
 
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
     (ship.repairQueue ?? []).forEach((task, idx) => {
