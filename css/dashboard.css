@@ -579,7 +579,7 @@
     font-size: 0.8rem;
     color: #90a4ae;
 }
-.crew-impact-title {
+.overlay-section-title {
     font-size: 0.85rem;
     color: #78909c;
     letter-spacing: 0.5px;
@@ -615,6 +615,9 @@
 }
 .task-card.dragging {
     opacity: 0.4;
+}
+.task-card-static {
+    cursor: default;
 }
 .task-drag-handle {
     color: #546e7a;

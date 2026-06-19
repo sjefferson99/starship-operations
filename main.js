@@ -1185,7 +1185,50 @@ class StarshipGame {
         }
     }
 
+    _repairSystemLabel(systemKey) {
+        return { o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator' }[systemKey] ?? systemKey;
+    }
+
+    // Repairable systems not yet in the queue — the same set each system's own
+    // card offers a "Repair" button for, surfaced centrally so a task can be
+    // added from here too instead of having to find the right widget first.
+    _renderRepairAvailable() {
+        const listEl = document.getElementById('repair-available-list');
+        if (!listEl) return;
+
+        const rows = ['o2', 'co2', 'power']
+            .filter(key => this.repairManager.canRepair(key))
+            .map(key => {
+                const info = this.repairManager.describeRepair(key);
+                if (!info) return null; // module_specs.json still loading
+                const desc = info.band === 'replacement'
+                    ? `Replace (${info.hours}h, 50% cap, ${Math.round(info.destroyChance * 100)}% destroy risk)`
+                    : `Repair — ${info.band === 'major' ? 'Major' : 'Minor'} (${info.hours}h)`;
+                return `
+                    <li class="task-card task-card-static" data-system-key="${key}">
+                        <div class="task-info">
+                            <div class="task-title">${this._repairSystemLabel(key)}</div>
+                            <div class="task-meta">${desc}</div>
+                        </div>
+                        <button class="repair-btn repair-available-btn" data-system-key="${key}">Add to Queue</button>
+                    </li>`;
+            })
+            .filter(Boolean);
+
+        if (!rows.length) {
+            listEl.innerHTML = '<li class="task-empty">No repairs currently needed.</li>';
+            return;
+        }
+
+        listEl.innerHTML = rows.join('');
+        listEl.querySelectorAll('.repair-available-btn').forEach(btn =>
+            btn.addEventListener('click', () => this.startRepair(btn.dataset.systemKey))
+        );
+    }
+
     _displayRepairQueue() {
+        this._renderRepairAvailable();
+
         const listEl = document.getElementById('repair-queue-list');
         if (!listEl || this._isDraggingTask) return; // markup not present yet, or mid-drag
 
@@ -1200,8 +1243,6 @@ class StarshipGame {
             crewStatusEl.textContent = `Engineering on duty: ${onShift.length}/${totalEngineers}${nextStr}`;
         }
 
-        const labelFor = { o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator' };
-
         if (!this.repairQueue.length) {
             listEl.innerHTML = '<li class="task-empty">No repair tasks queued.</li>';
             return;
@@ -1213,7 +1254,7 @@ class StarshipGame {
                 <li class="task-card" draggable="true" data-task-id="${task.id}">
                     <span class="task-drag-handle">&#10495;</span>
                     <div class="task-info">
-                        <div class="task-title">${labelFor[task.systemKey] ?? task.systemKey} &mdash; ${task.band}</div>
+                        <div class="task-title">${this._repairSystemLabel(task.systemKey)} &mdash; ${task.band}</div>
                         <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
                         <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${task.totalHours}h</div>
                     </div>

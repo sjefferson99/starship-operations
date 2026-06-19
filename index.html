@@ -449,6 +449,13 @@
                 <button id="task-queue-close-btn" class="overlay-close-btn">&times;</button>
             </div>
             <p class="repair-crew-status" id="repair-crew-status">Engineering on duty: 0/0</p>
+
+            <h3 class="overlay-section-title">Available Repairs</h3>
+            <ul id="repair-available-list" class="overlay-list">
+                <li class="task-empty">No repairs currently needed.</li>
+            </ul>
+
+            <h3 class="overlay-section-title">Queue</h3>
             <ul id="repair-queue-list" class="overlay-list">
                 <li class="task-empty">No repair tasks queued.</li>
             </ul>
@@ -473,7 +480,7 @@
                 <h2>Crew</h2>
                 <button id="crew-screen-close-btn" class="overlay-close-btn">&times;</button>
             </div>
-            <h3 class="crew-impact-title">Active Health Impacts</h3>
+            <h3 class="overlay-section-title">Active Health Impacts</h3>
             <div id="crew-impact-panel" class="crew-impact-panel"></div>
             <ul id="crew-list" class="overlay-list">
                 <li class="task-empty">No crew aboard.</li>
