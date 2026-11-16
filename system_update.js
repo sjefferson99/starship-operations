@@ -25,6 +25,7 @@ class SystemUpdate {
         this.TRANSCEIVER_RANGE_LY_PER_W = 1;
         this.WATER_MAKER_DRAW_W  = 30;
         this.WATER_MAKER_L_HR    = 6;
+        this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR = 0.4; // condensing from air vs reclaiming waste
 
         // Water usage, per crew member per day.
         this.WATER_CONSERVATIVE_L_PER_CREW_DAY = 25;
@@ -98,7 +99,7 @@ class SystemUpdate {
         const fuel  = this.game.systems.fuel;
         if (!power.active || power.destroyed || fuel.current <= 0) return 0;
         const ratedOutputW = this._moduleField('generator', power.tier, 'outputW', this.GEN_OUTPUT_W);
-        return ratedOutputW * this.game.repairManager.efficiency(power.repairPct, power.destroyed);
+        return ratedOutputW * this.game.repairManager.efficiencyFor('power');
     }
 
     _computePowerBudget(dt) {
@@ -126,7 +127,7 @@ class SystemUpdate {
 
         const consumptionLhr = this.O2_CONSUMPTION_L_HR * crew;
         const ratedLhr       = this._moduleField('o2Generator', sys.tier, 'outputLhr', this.O2_GEN_L_HR_BY_TIER[sys.tier - 1] ?? 0);
-        const efficiency     = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
+        const efficiency     = this.game.repairManager.efficiencyFor('o2');
         const maxGenLhr      = ratedLhr * sys.count * efficiency * this._powerFraction();
 
         // Vent computed first — needed to calculate maintenance generation
@@ -170,7 +171,7 @@ class SystemUpdate {
 
         const productionLhr = this.CO2_PRODUCTION_L_HR * crew;
         const ratedLhr      = this._moduleField('co2Scrubber', sys.tier, 'outputLhr', this.CO2_SCR_L_HR_BY_TIER[sys.tier - 1] ?? 0);
-        const efficiency    = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
+        const efficiency    = this.game.repairManager.efficiencyFor('co2');
         const maxScrLhr     = ratedLhr * sys.count * efficiency * this._powerFraction();
 
         // Ambient/outside CO2 level — vents equalise the cabin toward this, not toward 0.
@@ -222,7 +223,7 @@ class SystemUpdate {
 
         const ratedTransmitW = this._moduleField('transceiver', sys.tier, 'transmitW', this.TRANSCEIVER_TRANSMIT_W);
         const rangeLyPerW    = this._moduleField('transceiver', sys.tier, 'rangeLyPerW', this.TRANSCEIVER_RANGE_LY_PER_W);
-        const efficiency     = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
+        const efficiency     = this.game.repairManager.efficiencyFor('transceiver');
         const running        = this._isRunning(sys);
         const fraction       = running ? this._powerFraction() : 0;
 
@@ -324,9 +325,11 @@ class SystemUpdate {
         // the moment the tank is relieved (dumped, or reclaimed by a water maker).
         black.exposureHours = black.level >= this.BLACK_WATER_FULL_PCT ? (black.exposureHours || 0) + hours : 0;
 
+        // Net of what the water maker took back out this tick, so the dashboard's
+        // fill rate goes negative when reclamation is winning.
         black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
         black.solidRateLhr  = black.liquidRateLhr * 0.2;
-        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr;
+        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr - (black.reclaimRateLhr || 0);
     }
 
     // Water maker: reclaims black-water liquid into fresh water first; while
@@ -339,10 +342,12 @@ class SystemUpdate {
         if (!wm) return;
 
         wm.outputLhr = 0; wm.loadFraction = 0; wm.source = 'none';
+        black.reclaimRateLhr = 0;
+        black.reclaimStarved = false; // true when the maker wanted more than the tank's liquid could give
         wm.ratedLhr  = this._moduleField('waterMaker', wm.tier, 'outputLhr', this.WATER_MAKER_L_HR) * (wm.count ?? 1);
         if (!this._isRunning(wm) || hours <= 0) return;
 
-        const efficiency = this.game.repairManager.efficiency(wm.repairPct, wm.destroyed);
+        const efficiency = this.game.repairManager.efficiencyFor('waterMaker');
         const maxL = wm.ratedLhr * efficiency * this._powerFraction() * hours;
         if (maxL <= 0) return;
 
@@ -355,8 +360,17 @@ class SystemUpdate {
         black.liquidL  -= fromBlack;
         fresh.current  += madeL;
 
+        // Only the liquid can be reclaimed. If the maker had capacity to spare but
+        // the liquid ran out, what's left in the tank is solid matter it can't touch.
+        black.reclaimRateLhr = fromBlack / hours;
+        black.reclaimStarved = fromBlack < wantL;
+
+        // Condensing clean moisture from outside air is far less work than
+        // processing waste, so that share of the output draws less power
+        // (`atmospherePowerFactor` in module_specs.json).
+        const airFactor = this._moduleField('waterMaker', wm.tier, 'atmospherePowerFactor', this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR);
         wm.outputLhr    = madeL / hours;
-        wm.loadFraction = madeL / maxL;
+        wm.loadFraction = (fromBlack + fromAir * airFactor) / maxL;
         wm.source       = madeL <= 0 ? (roomL <= 0 ? 'full' : 'none') : fromAir > fromBlack ? 'atmosphere' : 'blackWater';
     }
 

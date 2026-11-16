@@ -368,6 +368,11 @@
                             <span class="rate-label">Crew consumption:</span>
                             <span class="rate-value" id="freshwater-rate">&#8722;0.000 L/hr</span>
                         </div>
+                        <!-- Always shown, rationing or not, as the reference figure for full use -->
+                        <div class="rate-row">
+                            <span class="rate-label">Unrationed use:</span>
+                            <span class="rate-value" id="freshwater-preview-use">&mdash;</span>
+                        </div>
                         <div class="rate-row" id="freshwater-maker-row" style="display:none">
                             <span class="rate-label">Water maker:</span>
                             <span class="rate-value rate-pos-good" id="freshwater-maker">+0.000 L/hr</span>
@@ -379,6 +384,23 @@
                         <div class="rate-row" id="freshwater-ration-timer-row" style="display:none">
                             <span class="rate-label">Health impact in:</span>
                             <span class="rate-value" id="freshwater-ration-timer">&mdash;</span>
+                        </div>
+                        <!-- What switching rationing off would mean, shown while it's on (main.js _displayRationPreview) -->
+                        <div id="freshwater-preview" class="ration-preview" style="display:none">
+                            <div class="ration-preview-title">If you come off rationing</div>
+                            <div class="rate-row">
+                                <span class="rate-label">Water maker is making:</span>
+                                <span class="rate-value" id="freshwater-preview-maker">&mdash;</span>
+                            </div>
+                            <div class="rate-row rate-net-row">
+                                <span class="rate-label">Net:</span>
+                                <span class="rate-value" id="freshwater-preview-net">&mdash;</span>
+                            </div>
+                            <div class="ration-preview-verdict" id="freshwater-preview-verdict"></div>
+                        </div>
+                        <div class="rate-row" id="freshwater-reset-row" style="display:none">
+                            <span class="rate-label">To come off rationing:</span>
+                            <span class="rate-value" id="freshwater-reset">&mdash;</span>
                         </div>
                     </div>
                     <div class="system-controls">
@@ -425,10 +447,15 @@
                             <span class="rate-label">Solid matter:</span>
                             <span class="rate-value" id="blackwater-solid">0.00 L</span>
                         </div>
+                        <div class="rate-row" id="blackwater-reclaim-row" style="display:none">
+                            <span class="rate-label">Water maker reclaim:</span>
+                            <span class="rate-value rate-neg-good" id="blackwater-reclaim">&#8722;0.000 L/hr</span>
+                        </div>
                         <div class="rate-row rate-net-row">
-                            <span class="rate-label">Fill rate:</span>
+                            <span class="rate-label">Net fill rate:</span>
                             <span class="rate-value" id="blackwater-rate">+0.000 L/hr</span>
                         </div>
+                        <div class="rate-note" id="blackwater-solids-note" style="display:none"></div>
                         <div class="rate-row" id="blackwater-exposure-row" style="display:none">
                             <span class="rate-value rate-neg" id="blackwater-exposure"></span>
                         </div>

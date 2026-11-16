@@ -16,7 +16,7 @@ function sampleShip(overrides = {}) {
             fuel: { currentL: 42.5, capacityL: 100 },
         },
         repairQueue: [
-            { id: 'task-1', systemKey: 'o2', band: 'minor', totalHours: 3, hoursRemaining: 1.5, status: 'in-progress' },
+            { id: 'task-1', systemKey: 'o2', band: 'minor', totalHours: 3, hoursRemaining: 1.5, status: 'in-progress', targetPct: 50 },
             { id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 10, status: 'queued' },
         ],
         ...overrides,
@@ -81,6 +81,8 @@ test.describe('db.js', () => {
         expect(ship.systemState.o2Generator).toEqual({ active: true, count: 1, tier: 1, target: 21.0, repairPct: 80, juryRigged: false, destroyed: false });
         expect(ship.systemState.generator).toEqual({ active: false, count: null, tier: null, target: null, repairPct: 0, juryRigged: true, destroyed: true });
         expect(ship.repairQueue.map(t => t.id)).toEqual(['task-1', 'task-2']);
+        // A task saved without a target (from before targets existed) reads back as a full repair.
+        expect(ship.repairQueue.map(t => t.targetPct)).toEqual([50, 100]);
 
         // This payload predates the transceiver / water maker: no row is written
         // for them, and they read back flagged as absent rather than as broken.
@@ -177,7 +179,7 @@ test.describe('db.js', () => {
 
         const tasks = db.getSave(conn, id).shipInstances.ships[0].repairQueue;
         expect(tasks).toHaveLength(1);
-        expect(tasks[0]).toEqual({ id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 4, status: 'in-progress' });
+        expect(tasks[0]).toEqual({ id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 4, status: 'in-progress', targetPct: 100 });
     });
 
     test('two saves with the same ship id do not collide with each other', () => {

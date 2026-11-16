@@ -1,5 +1,6 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "_repairStages": "Ordered rungs from wrecked to perfect. toPct = where the stage ends (it starts where the previous one ended); efficiency = fraction of rated output at toPct; hours = crew-hours for the whole stage; destroyChance = chance the attempt wrecks the module; juryRig = comes out jury-rigged (wears juryRigWearMultiplier x faster) until a later stage is completed. See repair_manager.js.",
   "modules": {
     "o2Generator": {
       "1": {
@@ -8,11 +9,13 @@
         "massKg": 45,
         "volumeM3": 0.5,
         "degradationPctPerHr": 0.14,
-        "repair": {
-          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
-          "major":       { "minPct": 20, "maxPct": 50, "hours": 10, "restorePct": 100 },
-          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 10, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
-        }
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Salvage",  "toPct": 20,  "efficiency": 0.10, "hours": 6, "destroyChance": 0.2, "juryRig": true },
+          { "name": "Rebuild",  "toPct": 50,  "efficiency": 0.40, "hours": 5 },
+          { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 3 },
+          { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
+        ]
       }
     },
     "co2Scrubber": {
@@ -22,11 +25,13 @@
         "massKg": 38,
         "volumeM3": 0.45,
         "degradationPctPerHr": 0.14,
-        "repair": {
-          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
-          "major":       { "minPct": 20, "maxPct": 50, "hours": 10, "restorePct": 100 },
-          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 10, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
-        }
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Salvage",  "toPct": 20,  "efficiency": 0.10, "hours": 6, "destroyChance": 0.2, "juryRig": true },
+          { "name": "Rebuild",  "toPct": 50,  "efficiency": 0.40, "hours": 5 },
+          { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 3 },
+          { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
+        ]
       }
     },
     "generator": {
@@ -36,11 +41,13 @@
         "massKg": 65,
         "volumeM3": 0.7,
         "degradationPctPerHr": 0.14,
-        "repair": {
-          "minor":       { "minPct": 50, "maxPct": 95, "hours": 4,  "restorePct": 100 },
-          "major":       { "minPct": 20, "maxPct": 50, "hours": 14, "restorePct": 100 },
-          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 14, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
-        }
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Salvage",  "toPct": 20,  "efficiency": 0.10, "hours": 8, "destroyChance": 0.2, "juryRig": true },
+          { "name": "Rebuild",  "toPct": 50,  "efficiency": 0.40, "hours": 7 },
+          { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 4 },
+          { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
+        ]
       }
     },
     "transceiver": {
@@ -51,25 +58,30 @@
         "massKg": 6,
         "volumeM3": 0.05,
         "degradationPctPerHr": 0.002,
-        "repair": {
-          "minor":       { "minPct": 50, "maxPct": 95, "hours": 2, "restorePct": 100 },
-          "major":       { "minPct": 20, "maxPct": 50, "hours": 6, "restorePct": 100 },
-          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 6, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
-        }
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Salvage",       "toPct": 20,  "efficiency": 0.05, "hours": 4, "destroyChance": 0.2, "juryRig": true },
+          { "name": "Rewire",        "toPct": 50,  "efficiency": 0.20, "hours": 3 },
+          { "name": "Amplifier",     "toPct": 80,  "efficiency": 0.60, "hours": 2 },
+          { "name": "Antenna align", "toPct": 100, "efficiency": 1.00, "hours": 1 }
+        ]
       }
     },
     "waterMaker": {
       "1": {
         "powerDrawW": 30,
+        "atmospherePowerFactor": 0.4,
         "outputLhr": 6.0,
         "massKg": 24,
         "volumeM3": 0.2,
         "degradationPctPerHr": 0.14,
-        "repair": {
-          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3, "restorePct": 100 },
-          "major":       { "minPct": 20, "maxPct": 50, "hours": 8, "restorePct": 100 },
-          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 8, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
-        }
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Salvage",  "toPct": 20,  "efficiency": 0.10, "hours": 5, "destroyChance": 0.2, "juryRig": true },
+          { "name": "Rebuild",  "toPct": 50,  "efficiency": 0.40, "hours": 4 },
+          { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 3 },
+          { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
+        ]
       }
     }
   }

@@ -19,7 +19,8 @@ test.describe('module repair state', () => {
         await expect(page.locator('#co2-repair-pct')).toHaveText('Repair: 25%');
         await expect(page.locator('#power-repair-pct')).toHaveText('Repair: 25%');
         await expect(page.locator('#o2-repair-btn')).toBeVisible();
-        await expect(page.locator('#o2-repair-btn')).toHaveText('Repair — Major (10h)');
+        // 25% is part-way up the 20→50 stage: 5/6 of its 5h, then 3h and 2h for the stages above.
+        await expect(page.locator('#o2-repair-btn')).toHaveText('Repair to 100% (9.2h)');
 
         expect(errors).toEqual([]);
     });
@@ -41,20 +42,88 @@ test.describe('module repair state', () => {
         expect(pct).toBeCloseTo(80 - 0.14, 5);
     });
 
-    test('minor band (50-95%) shows the right label and queues a 3h task', async ({ page }) => {
+    test('a lightly worn module needs only its top stage', async ({ page }) => {
         await startNewGame(page);
         await page.evaluate(() => { window.game.systems.o2.repairPct = 80; window.game.updateDisplay(); });
 
-        await expect(page.locator('#o2-repair-btn')).toHaveText('Repair — Minor (3h)');
+        await expect(page.locator('#o2-repair-btn')).toHaveText('Repair to 100% (2h)');
         await page.click('#o2-repair-btn');
-        await expect(page.locator('#o2-repair-status')).toContainText('Queued (minor) — 3.0h left');
+        await expect(page.locator('#o2-repair-status')).toContainText('Queued: Tune-up → 100% — 2.0h left');
     });
 
-    test('replacement band (<20%) shows the destroy-risk label', async ({ page }) => {
+    test('a wrecked module (<20%) shows the destroy risk of its salvage stage', async ({ page }) => {
         await startNewGame(page);
         await page.evaluate(() => { window.game.systems.co2.repairPct = 10; window.game.updateDisplay(); });
 
-        await expect(page.locator('#co2-repair-btn')).toHaveText('Replace (10h, 50% cap, 20% destroy risk)');
+        // Half of the 6h salvage stage, then 5h + 3h + 2h.
+        await expect(page.locator('#co2-repair-btn')).toHaveText('Repair to 100% (13h) — 20% destroy risk');
+    });
+
+    test('output follows the stage curve in module_specs.json, interpolated between stage boundaries', async ({ page }) => {
+        await startNewGame(page);
+        const eff = await page.evaluate(() => [0, 10, 20, 35, 50, 80, 100].map(p => window.game.repairManager.efficiencyAt('o2', p)));
+        const expected = [0, 0.05, 0.10, 0.25, 0.40, 0.80, 1];
+        eff.forEach((e, i) => expect(e).toBeCloseTo(expected[i], 6));
+
+        // The transceiver has its own, harsher curve.
+        const radio = await page.evaluate(() => window.game.repairManager.efficiencyAt('transceiver', 50));
+        expect(radio).toBeCloseTo(0.2, 6);
+    });
+
+    test('a repair lands in chunks: nothing improves mid-stage, then the module steps up', async ({ page }) => {
+        await startNewGame(page);
+        const result = await page.evaluate(() => {
+            const g = window.game;
+            g._stopTimer();
+            g.gameTime = 9 * 3600; // on shift
+            g.systems.o2.repairPct = 20;
+            g.startRepair('o2');   // Rebuild 5h → 50, Overhaul 3h → 80, Tune-up 2h → 100
+            const at = () => ({ pct: g.systems.o2.repairPct, band: g.repairQueue[0]?.band, left: g.repairQueue[0]?.hoursRemaining });
+
+            g.repairManager.processQueue(4 * 3600);
+            const midStage = at();
+            g.repairManager.processQueue(1 * 3600);
+            const afterFirst = at();
+            // One big tick finishes the second stage and carries on into the third.
+            g.repairManager.processQueue(4 * 3600);
+            const afterBig = at();
+            g.repairManager.processQueue(1 * 3600);
+            return { midStage, afterFirst, afterBig, done: { pct: g.systems.o2.repairPct, queue: g.repairQueue.length } };
+        });
+
+        expect(result.midStage).toMatchObject({ pct: 20, band: 'Rebuild' });
+        expect(result.midStage.left).toBeCloseTo(1, 6);
+        expect(result.afterFirst).toMatchObject({ pct: 50, band: 'Overhaul' });
+        expect(result.afterBig).toMatchObject({ pct: 80, band: 'Tune-up' });
+        expect(result.afterBig.left).toBeCloseTo(1, 6);
+        expect(result.done).toEqual({ pct: 100, queue: 0 });
+    });
+
+    test('a repair stops at its target, which can be picked on the card and changed in the queue', async ({ page }) => {
+        await startNewGame(page);
+        await page.evaluate(() => { window.game._stopTimer(); window.game.gameTime = 9 * 3600; window.game.updateDisplay(); });
+
+        // Power starts at 25%: targets on offer are the stage tops above that.
+        const chips = page.locator('#power-repair-targets .repair-target-chip');
+        await expect(chips).toHaveText(['50%', '80%', '100%']);
+        await expect(page.locator('#power-repair-targets .chip-active')).toHaveText('100%');
+
+        await chips.filter({ hasText: '50%' }).click();
+        await expect(page.locator('#power-repair-btn')).toHaveText('Repair to 50% (5.8h)');
+        await expect(page.locator('#power-repair-targets .repair-target-note')).toContainText('Output now 15% of rated');
+        await page.click('#power-repair-btn');
+        expect(await page.evaluate(() => window.game.repairQueue[0].targetPct)).toBe(50);
+
+        // Raise it to 80% from the queue, then let it run: it stops there, not at 100.
+        await page.click('#repair-queue-btn');
+        await page.locator('#repair-queue-list .repair-target-chip').filter({ hasText: '80%' }).click();
+        const result = await page.evaluate(() => {
+            const g = window.game;
+            const target = g.repairQueue[0].targetPct;
+            g.repairManager.processQueue(12 * 3600);
+            return { target, pct: g.systems.power.repairPct, queue: g.repairQueue.length };
+        });
+        expect(result).toEqual({ target: 80, pct: 80, queue: 0 });
     });
 
     test('tasks only progress while crew is on shift', async ({ page }) => {
@@ -69,13 +138,13 @@ test.describe('module repair state', () => {
         await page.click('#o2-repair-btn');
         await page.evaluate(() => window.game.repairManager.processQueue(300));
         let hours = await page.evaluate(() => window.game.repairQueue[0].hoursRemaining);
-        expect(hours).toBe(3);
+        expect(hours).toBe(2);
 
         // Inside the 9-13 shift — task should progress.
         await page.evaluate(() => { window.game.gameTime = 9.5 * 3600; });
         await page.evaluate(() => window.game.repairManager.processQueue(300));
         hours = await page.evaluate(() => window.game.repairQueue[0].hoursRemaining);
-        expect(hours).toBeCloseTo(3 - 300 / 3600, 5);
+        expect(hours).toBeCloseTo(2 - 300 / 3600, 5);
     });
 
     test('cancelling removes a queued task', async ({ page }) => {
@@ -88,28 +157,34 @@ test.describe('module repair state', () => {
         expect(len).toBe(0);
     });
 
-    test('successful replacement repair caps at 50% and jury-rigs the module', async ({ page }) => {
+    test('a successful salvage stage leaves the module jury-rigged until the next stage is done', async ({ page }) => {
         await startNewGame(page);
-        await page.evaluate(() => {
-            window.game.gameTime = 9.5 * 3600;
-            window.game.systems.power.repairPct = 5;
+        const result = await page.evaluate(() => {
+            const g = window.game;
+            g._stopTimer();
+            g.gameTime = 9.5 * 3600;
+            g.systems.power.repairPct = 5;
             const original = Math.random;
             Math.random = () => 0.999; // avoid the 20% destroy roll
-            window.game.startRepair('power');
-            window.game.repairQueue.find(t => t.systemKey === 'power').hoursRemaining = 0.0001;
-            window.game.repairManager.processQueue(1);
+            g.startRepair('power');
+            g.repairQueue[0].hoursRemaining = 0.0001;
+            g.repairManager.processQueue(1);
             Math.random = original;
+            const salvaged = { pct: g.systems.power.repairPct, jury: g.systems.power.juryRigged,
+                               destroyed: g.systems.power.destroyed, band: g.repairQueue[0].band };
+
+            g.repairQueue[0].hoursRemaining = 0.0001;
+            g.repairManager.processQueue(1);
+            return { salvaged, rebuilt: { pct: g.systems.power.repairPct, jury: g.systems.power.juryRigged } };
         });
-        const power = await page.evaluate(() => window.game.systems.power);
-        expect(power.repairPct).toBe(50);
-        expect(power.juryRigged).toBe(true);
-        expect(power.destroyed).toBe(false);
+        expect(result.salvaged).toEqual({ pct: 20, jury: true, destroyed: false, band: 'Rebuild' });
+        expect(result.rebuilt).toEqual({ pct: 50, jury: false });
     });
 
     test('degraded power output is displayed to 2dp, not raw floating-point noise', async ({ page }) => {
         await startNewGame(page);
         await page.evaluate(() => {
-            // A non-round efficiency multiplier ((repairPct/100)^2) is exactly what
+            // A non-round efficiency multiplier (interpolated between repair stages) is exactly what
             // produced the 16-digit floats this test guards against.
             window.game.systems.power.repairPct = 83;
             window.game.systems.power.active = true;
@@ -124,7 +199,7 @@ test.describe('module repair state', () => {
         await expect(page.locator('#power-co2-draw')).toHaveText(/^(0\.00|−\d+\.\d{2}) W$/);
     });
 
-    test('failed replacement repair destroys the module and disables its toggle', async ({ page }) => {
+    test('a failed salvage stage destroys the module and disables its toggle', async ({ page }) => {
         await startNewGame(page);
         await page.evaluate(() => {
             window.game.gameTime = 9.5 * 3600;

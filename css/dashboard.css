@@ -1112,3 +1112,36 @@
 
 /* ── Full-width action button inside a system card (e.g. Open Comms & Nav on the Transceiver) ── */
 .card-action-btn { width: 100%; padding: 8px 14px; font-size: 0.82rem; }
+
+/* ── "Repair to" target chips (system cards, Available Repairs, queued tasks) ── */
+.repair-targets { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 6px; }
+.repair-target-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.repair-target-label { font-size: 0.68rem; color: #78909c; text-transform: uppercase; letter-spacing: 0.5px; }
+.repair-target-chip {
+    padding: 2px 9px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border-radius: 10px;
+    background: rgba(255, 167, 38, 0.08);
+    color: #b08a50;
+    border: 1px solid rgba(255, 167, 38, 0.25);
+}
+.repair-target-chip:hover { background: rgba(255, 167, 38, 0.2); color: #ffcc80; transform: none; box-shadow: none; }
+.repair-target-chip.chip-active { background: rgba(255, 167, 38, 0.3); color: #fff3e0; border-color: rgba(255, 167, 38, 0.75); }
+.repair-target-note { font-size: 0.68rem; color: #78909c; }
+
+.repair-pct { white-space: nowrap; }
+
+/* A switch that can't be used right now must look it (e.g. coming off rationing without enough water). */
+.toggle-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.toggle-btn:disabled:hover { transform: none; box-shadow: none; }
+
+/* ── Fresh water: "if you come off rationing" preview ── */
+.ration-preview { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255, 255, 255, 0.1); }
+.ration-preview-title { font-size: 0.66rem; color: #78909c; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.ration-preview-verdict { font-size: 0.72rem; margin-top: 3px; }
+.ration-preview-verdict.verdict-good { color: #66bb6a; }
+.ration-preview-verdict.verdict-bad  { color: #ffb74d; }
+
+/* Explanatory note inside a rate panel (e.g. why the water maker is not reclaiming more) */
+.rate-note { font-size: 0.72rem; color: #ffb74d; line-height: 1.4; padding-top: 4px; }

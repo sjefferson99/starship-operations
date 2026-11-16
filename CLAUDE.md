@@ -89,6 +89,16 @@ reordering "pause" a task instead of resetting it). Each active task's progress 
 divided by `CrewManager.effectivenessMultiplier(health)` of whichever on-shift crew member is at
 that queue position — a positional pairing for the tick, not a persistent assignment.
 
+**Repairs are staged, and the stages are the tuning dials.** Each module tier in
+`module_specs.json` has a `repairStages` list (`name`, `toPct`, `efficiency`, `hours`, optional
+`destroyChance`/`juryRig`) — see the header comment in `repair_manager.js`. Those stages define
+both the output curve (`efficiencyFor(systemKey)`: linear between stage boundaries, replacing the
+old fixed quadratic) and how a repair proceeds: a task works one stage at a time, the module jumps
+to that stage's `toPct` only when the stage completes, and the task then continues to the next
+stage until `task.targetPct` is reached. `task.band`/`totalHours`/`hoursRemaining` describe the
+stage currently being worked, not the whole job (`remainingHours(task)` gives that). The target is
+chosen with the "Repair to" chips (card, Available Repairs, or on a queued task) and defaults to 100.
+
 **Crew health lives in `crew_manager.js`** (`CrewManager`), separate from `data/crew_manifest.json`
 (the static, read-only template of `{id, classes, shifts}`). `this.crewManifest` on `StarshipGame`
 is the *live* roster — template merged with per-save state (`health`, `varianceFactor`, `dead`,

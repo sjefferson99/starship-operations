@@ -44,8 +44,14 @@ test.describe('guided tour', () => {
         await expect(title).toHaveText('No power, no systems');
         await page.click('#tour-next-btn');
 
+        // The tour steers the player to a partial repair: pick 50%, then order it.
         await expect(title).toHaveText('Repair the transceiver first');
+        await page.locator('#transceiver-repair-targets .repair-target-chip').filter({ hasText: '50%' }).click();
+
+        await expect(title).toHaveText('Order the repair');
+        await expect(page.locator('#transceiver-repair-btn')).toHaveText('Repair to 50% (2.5h)');
         await page.click('#transceiver-repair-btn');
+        expect(await page.evaluate(() => window.game.repairQueue[0].targetPct)).toBe(50);
 
         await expect(title).toHaveText('The Repair Queue');
         await page.click('#repair-queue-btn');
@@ -97,6 +103,41 @@ test.describe('guided tour', () => {
     });
 });
 
+test.describe('tutorial messages hold the clock', () => {
+    const clock = page => page.evaluate(() => window.game.gameTime);
+
+    test('time stands still during the tour and starts once it is dismissed', async ({ page }) => {
+        await page.addInitScript(() => localStorage.removeItem('starshipOps.tourSeen'));
+        await startNewGame(page);
+
+        await page.waitForTimeout(2200); // two real ticks' worth
+        expect(await clock(page)).toBe(0);
+
+        // The controls still work while time is held.
+        await page.click('#tour-next-btn');
+        await page.click('#tour-next-btn');
+        await page.click('#vent-toggle');
+        expect(await page.evaluate(() => window.game.ventsOpen)).toBe(true);
+
+        await page.click('#tour-skip-btn');
+        await expect.poll(() => clock(page), { timeout: 4000 }).toBeGreaterThan(0);
+    });
+
+    test('time stands still while a tip is showing', async ({ page }) => {
+        await page.addInitScript(() => localStorage.removeItem('starshipOps.tipsOff'));
+        await startNewGame(page);
+
+        await page.evaluate(() => { window.game.systems.transceiver.repairPct = 100; window.game.tour.checkTips(); });
+        await expect(page.locator('#tour-card')).toBeVisible();
+        const held = await clock(page);
+        await page.waitForTimeout(2200);
+        expect(await clock(page)).toBe(held);
+
+        await page.click('#tour-next-btn'); // "Got it"
+        await expect.poll(() => clock(page), { timeout: 4000 }).toBeGreaterThan(held);
+    });
+});
+
 test.describe('contextual tips', () => {
     const enableTips = page => page.addInitScript(() => localStorage.removeItem('starshipOps.tipsOff'));
 
@@ -109,7 +150,7 @@ test.describe('contextual tips', () => {
         await expect(page.locator('#tour-card')).toBeHidden();
 
         await page.evaluate(() => { window.game.systems.transceiver.repairPct = 100; window.game.tour.checkTips(); });
-        await expect(page.locator('#tour-step-count')).toHaveText('Tip');
+        await expect(page.locator('#tour-step-count')).toHaveText('Tip · time paused');
         await expect(page.locator('#tour-title')).toHaveText('Transceiver repaired');
 
         await page.click('#tour-next-btn'); // "Got it"

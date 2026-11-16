@@ -86,15 +86,20 @@ test.describe('transceiver', () => {
 
         await page.click('#transceiver-toggle');
         const worn = await reach(25);
-        expect(worn.range).toBeCloseTo(0.125, 5);
+        expect(worn.range).toBeCloseTo(0.15, 5);
         expect(worn.local).toBe(false);
         expect(worn.visible).toEqual(['home']);
 
-        // Just past the local-network threshold, still short of anything further out.
+        // Just past the local-network threshold (0.25 ly), still short of anything further out (0.3 ly minimum).
         const partial = await reach(36);
-        expect(partial.range).toBeCloseTo(0.2592, 4);
+        expect(partial.range).toBeCloseTo(0.26, 5);
         expect(partial.local).toBe(true);
         expect(partial.visible).toEqual(['home']);
+
+        // One repair stage up (50%): the local network for certain, and only contacts that really are that close.
+        const half = await reach(50);
+        expect(half.range).toBeCloseTo(0.4, 5);
+        expect(half.local).toBe(true);
 
         // Fully repaired: rated range covers all three starting contacts, and no more.
         const full = await reach(100);
@@ -177,6 +182,23 @@ test.describe('market and water maker', () => {
         await expect(page.locator('#watermaker-repair-btn')).toBeVisible();
     });
 
+    test('the market list keeps its scroll position while the game ticks, and across a purchase', async ({ page }) => {
+        await startNewGame(page);
+        await bringCommsOnline(page);
+        await page.click('#comms-nav-btn');
+
+        const services = page.locator('.comms-details-services');
+        await services.evaluate(el => { el.scrollTop = 120; });
+        await page.waitForTimeout(2200); // two real game ticks, each refreshing the open screen
+        expect(await services.evaluate(el => el.scrollTop)).toBe(120);
+
+        // Buying changes the list (and the credits line) — a real re-render, scroll still kept.
+        // (Bought through the game rather than by clicking, since clicking the top row would itself scroll the list.)
+        await page.evaluate(() => window.game.buyMarketItem(window.game.market.find(l => l.moduleKey === 'waterMaker').id));
+        await expect(page.locator('.market-card')).toHaveCount(6);
+        expect(await services.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    });
+
     test('spare modules can only be bought to replace a destroyed one', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
@@ -228,8 +250,11 @@ test.describe('market and water maker', () => {
             const freshBefore = fresh.current;
 
             g.systemUpdate.update(3600); // one hour: uses 100/24 L, makes 6 L
+            g.updateDisplay();
             const powered = { out: wm.outputLhr, source: wm.source, gained: fresh.current - freshBefore,
-                              blackLiquid: black.liquidL, draw: wm.drawW };
+                              blackLiquid: black.liquidL, draw: wm.drawW, fill: black.fillRateLhr,
+                              shown: document.getElementById('blackwater-rate').textContent,
+                              reclaimShown: document.getElementById('blackwater-reclaim').textContent };
 
             g.systems.power.current = 0;
             g.systemUpdate.update(3600);
@@ -242,7 +267,57 @@ test.describe('market and water maker', () => {
         // 20 L + this hour's 3.75 L of new liquid waste − 6 L reclaimed
         expect(result.powered.blackLiquid).toBeCloseTo(20 + (100 / 24) * 0.9 - 6, 5);
         expect(result.powered.draw).toBeCloseTo(30, 5);
+        // The dashboard's fill rate is net of reclamation: 4.5 L/hr of new waste − 6 L/hr reclaimed.
+        expect(result.powered.fill).toBeCloseTo((100 / 24) * 0.9 * 1.2 - 6, 5);
+        expect(result.powered.shown).toBe('−1.500 L/hr');
+        expect(result.powered.reclaimShown).toBe('−6.000 L/hr');
         expect(result.unpowered).toBe(0);
+    });
+
+    test('with no liquid waste left it condenses from air at lower power, and the tank says only solids remain', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+
+        const result = await page.evaluate(() => {
+            const g = window.game;
+            const wm = g.systems.waterMaker, black = g.systems.blackWater;
+            Object.assign(wm, { installed: true, repairPct: 100, active: true });
+            g.systems.power.current = 800;
+            black.liquidL = 0; black.solidL = 12;
+
+            g.systemUpdate.update(3600);
+            g.updateDisplay();
+            return {
+                out: wm.outputLhr, source: wm.source, draw: wm.drawW,
+                liquid: black.liquidL, solid: black.solidL, reclaim: black.reclaimRateLhr,
+            };
+        });
+
+        // Still makes its full 6 L/hr: 3.75 from this hour's liquid waste, the rest from the air.
+        expect(result.out).toBeCloseTo(6, 5);
+        expect(result.reclaim).toBeCloseTo(3.75, 5);
+        expect(result.liquid).toBeCloseTo(0, 5);
+        expect(result.solid).toBeCloseTo(12 + 0.75, 5); // untouched, and still growing
+        // Reclaimed share at full power, condensed share at 40%: (3.75 + 2.25 × 0.4) / 6 × 30 W.
+        expect(result.draw).toBeCloseTo(23.25, 5);
+
+        const note = page.locator('#blackwater-solids-note');
+        await expect(note).toBeVisible();
+        await expect(note).toContainText('All the liquid has been reclaimed');
+        await expect(note).toContainText('12.8 L is solid matter');
+
+        // Nothing but air to work with (no crew use, no liquid): the whole output is the cheap kind.
+        const airOnly = await page.evaluate(() => {
+            const g = window.game;
+            g.crew = 0; g.crewManifest.forEach(m => { m.dead = true; });
+            g.systems.blackWater.liquidL = 0;
+            g.systemUpdate._computePowerBudget(3600);
+            g.systemUpdate._updateWater(3600);
+            g.systemUpdate._updatePowerAndFuel(3600);
+            return { source: g.systems.waterMaker.source, draw: g.systems.waterMaker.drawW };
+        });
+        expect(airOnly.source).toBe('atmosphere');
+        expect(airOnly.draw).toBeCloseTo(12, 5);
     });
 
     test('new modules, market stock and black-water exposure survive save and reload', async ({ page }) => {
@@ -281,6 +356,62 @@ test.describe('market and water maker', () => {
             };
         });
         expect(after).toEqual(before);
+    });
+});
+
+test.describe('coming off water rationing', () => {
+    test('is free within the first day; after that it needs 50 L in the tank, and the card says so', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+        const btn = page.locator('#water-ration-toggle');
+        await page.click('#vent-toggle'); // or 30 sealed hours of CO₂ would end the game first
+
+        await expect(page.locator('#freshwater-preview')).toBeHidden(); // only shown while rationing
+        await expect(page.locator('#freshwater-preview-use')).toBeVisible(); // the full-rate figure is always there
+        await expect(page.locator('#freshwater-preview-use')).toHaveText('−4.167 L/hr');
+        await btn.click();
+        await page.evaluate(() => { window.game.systemUpdate.update(2 * 3600); window.game.updateDisplay(); });
+        await expect(page.locator('#freshwater-reset-row')).toBeHidden();
+
+        // No water maker yet: full use against nothing coming in.
+        await expect(page.locator('#freshwater-preview-use')).toHaveText('−4.167 L/hr');
+        await expect(page.locator('#freshwater-preview-maker')).toHaveText('none fitted');
+        await expect(page.locator('#freshwater-preview-net')).toHaveText('−4.167 L/hr');
+        await expect(page.locator('#freshwater-preview-verdict')).toContainText('Not sustainable — the tank would run dry in 11h 30m');
+        await btn.click(); // off again, no charge
+        expect(await page.evaluate(() => window.game.systems.freshWater.rationing)).toBe(false);
+
+        // A day and a bit on rations: 50 L start − 2h normal − 30h rationed leaves too little to rehydrate.
+        await btn.click();
+        await page.evaluate(() => { const g = window.game; for (let i = 0; i < 30; i++) g.systemUpdate.update(3600); g.updateDisplay(); });
+        await expect(btn).toBeDisabled();
+        await expect(page.locator('#freshwater-reset')).toContainText('needs 50 L in the tank');
+        await expect(page.locator('#freshwater-reset')).toContainText('L short');
+        expect(await btn.evaluate(el => getComputedStyle(el).cursor)).toBe('not-allowed'); // visibly unavailable
+
+        // Tank topped up past the cost: available again, and using it draws the 50 L.
+        const before = await page.evaluate(() => { const g = window.game; g.systems.freshWater.current = 120; g.updateDisplay(); return 120; });
+        await expect(btn).toBeEnabled();
+        await expect(page.locator('#freshwater-reset')).toHaveText('uses 50 L to rehydrate');
+        // The run-dry estimate counts what's left after that 50 L draw: 70 L at 4.167 L/hr.
+        await expect(page.locator('#freshwater-preview-verdict')).toContainText('run dry in 16h 48m');
+
+        // With a working, powered water maker the same preview shows it is sustainable.
+        await page.evaluate(() => {
+            const g = window.game;
+            Object.assign(g.systems.waterMaker, { installed: true, repairPct: 100, active: true });
+            g.systems.power.current = 800;
+            g.systemUpdate.update(60);
+            g.updateDisplay();
+        });
+        await expect(page.locator('#freshwater-preview-maker')).toHaveText('+6.000 L/hr');
+        await expect(page.locator('#freshwater-preview-net')).toHaveText('+1.833 L/hr');
+        await expect(page.locator('#freshwater-preview-verdict')).toContainText('Sustainable');
+        await btn.click();
+        const after = await page.evaluate(() => ({ rationing: window.game.systems.freshWater.rationing, current: window.game.systems.freshWater.current }));
+        expect(after.rationing).toBe(false);
+        expect(after.current).toBeCloseTo(before - 50 + 60 * (6 - 25 / 24) / 3600, 4); // the 50 L draw, plus that one minute of making vs rationed use
+        await expect(page.locator('#freshwater-preview')).toBeHidden();
     });
 });
 

@@ -95,10 +95,20 @@ class Tour {
             {
                 title: 'Repair the transceiver first',
                 target: '#card-transceiver .repair-panel',
-                hint: 'Click the “Repair” button on the Transceiver card.',
+                hint: 'Click “50%” next to “Repair to”.',
+                // Also satisfied if the player just orders the repair outright.
+                done: g => g._repairTargets.transceiver === 50 || g.repairQueue.some(t => t.systemKey === 'transceiver'),
+                body: `<p>Parts come from the local market, and the market is reached by radio — but at 25% repair this transceiver can't even reach the planet's own network.</p>
+                       <p>Repairs come in <strong>stages</strong>. Nothing gets a little better as work goes on: a module stays as it is until a stage is finished, then steps up to that level. The worse the damage, the longer each step takes.</p>
+                       <p><strong>Repair to</strong> picks where the job stops. A full repair is the default, but <strong>50%</strong> takes less than half the time and is already enough to reach the market — pick that, and finish the job later.</p>`,
+            },
+            {
+                title: 'Order the repair',
+                target: '#card-transceiver .repair-panel',
+                hint: 'Click the “Repair to 50%” button.',
                 done: g => g.repairQueue.some(t => t.systemKey === 'transceiver'),
-                body: `<p>Parts come from the local market, and the market is reached by radio. Every module has a <strong>repair level</strong>, and output falls off steeply as it drops: at 25% this transceiver can't even reach the planet's own network.</p>
-                       <p>The quickest way to order a repair is the button on the system's own card.</p>`,
+                body: `<p>The button now shows the job you've chosen and how long it will take. The line under the chips shows what you get for it: the transceiver's output now, and after the repair.</p>
+                       <p>The quickest way to order a repair is this button on the system's own card.</p>`,
             },
             {
                 title: 'The Repair Queue',
@@ -121,7 +131,7 @@ class Tour {
                 target: '#repair-queue-list',
                 enter: openQueue,
                 body: `<p>Tasks are worked from the top down, <strong>one task per engineer on duty</strong>. You're the only engineer, so only the top task progresses — the rest wait.</p>
-                       <p>Drag a task to reorder it. Moving one down pauses it without losing its progress.</p>`,
+                       <p>Drag a task to reorder it. Moving one down pauses it without losing its progress — and stages already finished stay finished. Each task's <strong>Repair to</strong> target can be changed here too.</p>`,
             },
             {
                 title: 'On shift, off shift',
@@ -149,7 +159,7 @@ class Tour {
                 title: 'Passing the time',
                 target: '.speed-controls',
                 enter: closeCrew,
-                body: `<p>Repairs take hours of ship time. Use the speed buttons to fast-forward, and drop back to 1× when something needs attention.</p>
+                body: `<p>Time has been standing still during this tour, and stops again whenever a tip is on screen. Once it's running, repairs take hours of ship time: use the speed buttons to fast-forward, and drop back to 1× when something needs attention.</p>
                        <p>From here, <strong>tips</strong> will point out what to do as things happen — next up, switching the transceiver on once it's fixed. <strong>Esc</strong> pauses and saves; the <strong>Tour</strong> button replays this.</p>`,
             },
         ];
@@ -201,9 +211,13 @@ class Tour {
                 id: 'transceiver-fixed',
                 title: 'Transceiver repaired',
                 target: '#card-transceiver',
-                when: g => { const t = g.systems.transceiver; return !t.destroyed && pct(t) >= 95 && !t.active; },
-                body: `<p>Switch it on with <strong>Enable Transceiver</strong>. It draws very little power and barely wears, so it can stay on.</p>
-                       <p>Range depends on its repair level: enough for the planet's own network first, then for contacts further out.</p>`,
+                when: g => {
+                    const t = g.systems.transceiver;
+                    const reach = g.repairManager.efficiencyFor('transceiver') * (t.ratedRangeLy ?? 2);
+                    return !t.destroyed && !t.active && reach >= g.commsNav.LOCAL_DETAILS_RANGE_LY;
+                },
+                body: `<p>It's now good enough to reach the local network. Switch it on with <strong>Enable Transceiver</strong> — it draws very little power and barely wears, so it can stay on.</p>
+                       <p>Range grows with each repair stage: the planet's own network first, then contacts further out.</p>`,
             },
             {
                 id: 'comms-online',
@@ -217,22 +231,22 @@ class Tour {
                 id: 'watermaker-bought',
                 title: 'Water maker fitted',
                 target: '#card-watermaker',
-                when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) < 95 && !queued(g, 'waterMaker'); },
+                when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) < 50 && !queued(g, 'waterMaker'); },
                 body: `<p>It's aboard, in the state you bought it. Queue its repair from this card — and check the Repair Queue order, since it will wait behind anything above it.</p>`,
             },
             {
                 id: 'watermaker-ready',
                 title: 'Water maker repaired',
                 target: '#card-watermaker',
-                when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) >= 95 && !w.active; },
+                when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) >= 50 && !w.active && !queued(g, 'waterMaker'); },
                 body: `<p>Switch it on. It reclaims black water into fresh water — which also keeps the waste tank down — and on a planet it tops up from the outside air.</p>
-                       <p>It's the hungriest thing aboard at 30 W: without the generator running it will flatten the battery in a few hours. Once the tank is recovering you can come off rationing.</p>`,
+                       <p>It's the hungriest thing aboard — 30 W while reclaiming waste, less while condensing from air — so without the generator running it will flatten the battery in a few hours. You can come off rationing once the tank can cover it: after a day on short rations that takes a one-off 50 L per person to rehydrate, so the button stays greyed out until there's that much in the tank.</p>`,
             },
             {
                 id: 'generator-fixed',
                 title: 'Generator repaired',
                 target: '#card-power',
-                when: g => { const p = g.systems.power; return !p.destroyed && pct(p) >= 95 && !p.active; },
+                when: g => { const p = g.systems.power; return !p.destroyed && pct(p) >= 50 && !p.active && !queued(g, 'power'); },
                 body: `<p>Switch it on to recharge the battery. It burns fuel while it runs, and throttles back by itself once the battery reaches the <strong>Maintain at</strong> level.</p>`,
             },
             {
@@ -248,7 +262,7 @@ class Tour {
                 title: 'Too far gone for a normal repair',
                 target: cardFor(isGamble),
                 when: g => !!find(g, isGamble),
-                body: `<p>Below 20% a module can only be patched up, not properly repaired. The patch brings it back to just 50%, makes it wear out ten times faster — and has a <strong>1 in 5 chance of destroying it</strong> outright.</p>
+                body: `<p>Below 20% the first repair stage is a salvage job. It only gets the module back to 20%, leaves it jury-rigged — and has a <strong>1 in 5 chance of destroying it</strong> outright.</p>
                        <p>Catch modules before they fall this far.</p>`,
             },
             {
@@ -256,14 +270,15 @@ class Tour {
                 title: 'Jury-rigged',
                 target: cardFor(isJuryRigged),
                 when: g => !!find(g, isJuryRigged),
-                body: `<p>The patch held. This module now runs at 50% and wears ten times faster than normal while it's on, so expect to be back here soon. A full repair once it's above 20% clears the jury-rig.</p>`,
+                body: `<p>The salvage held, but it's a bodge: this module wears ten times faster than normal while it's switched on. Finishing the next repair stage replaces the bodged parts and clears it.</p>`,
             },
             {
                 id: 'sliding',
                 title: 'This repair just got bigger',
                 target: cardFor(isSliding),
                 when: g => !!find(g, isSliding),
-                body: `<p>Above 50% a module needs only a quick minor repair. Below it, the same job takes three to four times as long — and output is already down by more than three-quarters.</p>`,
+                body: `<p>This module has slipped down a repair stage. Each stage lower takes longer to climb back out of, and output drops with it — below 50% it gives less than 40% of its rating.</p>
+                       <p>A short repair now is cheaper than a long one later.</p>`,
             },
             {
                 id: 'running',
@@ -302,7 +317,8 @@ class Tour {
                 title: 'Rationing is taking its toll',
                 target: '#card-freshwater',
                 when: g => { const f = g.systems.freshWater; return f.rationing && (f.rationHours ?? 0) >= g.crewManager.WATER_RATION_GRACE_HOURS; },
-                body: `<p>After a day on short rations your health has started to slip. Coming off rationing now costs a one-off 50 L per person to rehydrate — if the tank can't cover it, the button stays greyed out.</p>`,
+                body: `<p>After a day on short rations your health has started to slip. Coming off rationing now costs a one-off 50 L per person to rehydrate — until the tank holds that much, the button stays greyed out and the card shows how far short you are.</p>
+                       <p>So the way out is a working water maker, not the switch.</p>`,
             },
             {
                 id: 'black-filling',
@@ -310,7 +326,7 @@ class Tour {
                 target: '#card-blackwater',
                 when: g => g.systems.blackWater.level >= 70,
                 body: `<p>Used water ends up here. If the tank fills completely it overflows into the cabin and makes the crew ill.</p>
-                       <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims the liquid instead.</p>`,
+                       <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims the liquid instead — though not the solid matter, which slowly builds up until it's dumped.</p>`,
             },
         ];
     }
@@ -333,6 +349,14 @@ class Tour {
     _markTipSeen(id) {
         const seen = this._seenTips();
         if (!seen.includes(id)) this._set(this.TIPS_SEEN_PREFIX + this.game.saveId, JSON.stringify([...seen, id]));
+    }
+
+    // While a tour step or a tip is on screen the game clock stands still
+    // (main.js checks this each tick), so nothing happens behind the card and
+    // there's no hurry to read it. Unlike the pause menu this doesn't block
+    // the controls — action steps need them.
+    holdsTime() {
+        return this.active || !!this.tip;
     }
 
     // ── Tour lifecycle ──────────────────────────────────────────────────────
@@ -398,7 +422,7 @@ class Tour {
         this._scrolledForStep = false;
         this._actionStep      = false;
 
-        this.countEl.textContent = 'Tip';
+        this.countEl.textContent = 'Tip · time paused';
         this.titleEl.textContent = due.title;
         this.bodyEl.innerHTML    = due.body; // static strings from _buildTips(), never player data
         this.hintEl.style.display      = 'none';
@@ -430,7 +454,7 @@ class Tour {
         // flashing past.
         this._actionStep = !!step.done && !step.done(this.game);
 
-        this.countEl.textContent = `Step ${index + 1} of ${this.steps.length}`;
+        this.countEl.textContent = `Step ${index + 1} of ${this.steps.length} · time paused`;
         this.titleEl.textContent = step.title;
         this.bodyEl.innerHTML    = step.body; // static strings from _buildSteps(), never player data
 

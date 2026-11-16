@@ -282,6 +282,10 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Staged repairs: a task now works up through stages toward a chosen level.
+    db => {
+        db.exec('ALTER TABLE repair_tasks ADD COLUMN target_pct REAL;');
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -456,6 +460,7 @@ function _composeShip(db, saveId, shipRow) {
         repairQueue: tasks.map(t => ({
             id: t.id, systemKey: t.system_key, band: t.band,
             totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
+            targetPct: t.target_pct ?? 100, // tasks saved before repair targets existed were full repairs
         })),
     };
 }
@@ -585,9 +590,9 @@ function _saveOneShip(db, saveId, ship) {
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
     (ship.repairQueue ?? []).forEach((task, idx) => {
         db.prepare(`
-            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(task.id, saveId, ship.id, task.systemKey, task.band, task.totalHours, task.hoursRemaining, task.status, idx);
+            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position, target_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(task.id, saveId, ship.id, task.systemKey, task.band, task.totalHours, task.hoursRemaining, task.status, idx, task.targetPct ?? 100);
     });
 }
 

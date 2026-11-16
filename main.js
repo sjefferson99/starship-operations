@@ -39,6 +39,7 @@ class StarshipGame {
         this._selectedCommsId = null;
         this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
         this.market           = [];   // items for sale (CommsNav owns generation + purchase rules)
+        this._repairTargets   = {};   // systemKey → repair level picked on its "Repair to" chips (UI state only)
 
         // Every black water dump is detected and fined, no matter where you are.
         this.BLACK_WATER_DUMP_FINE = 100;
@@ -178,6 +179,19 @@ class StarshipGame {
         document.getElementById('watermaker-repair-btn').addEventListener('click',  () => this.startRepair('waterMaker'));
 
         document.getElementById('repair-queue-btn').addEventListener('click',     () => this.toggleTaskQueueScreen());
+
+        // "Repair to" chips are re-rendered constantly (cards, Available Repairs,
+        // queue rows), so one delegated listener handles them all. A chip with a
+        // task id retargets that queued repair; otherwise it picks the level the
+        // module's next repair will be ordered to.
+        document.addEventListener('click', e => {
+            const chip = e.target.closest('.repair-target-chip');
+            if (!chip) return;
+            const target = Number(chip.dataset.target);
+            if (chip.dataset.taskId) this.repairManager.setTaskTarget(chip.dataset.taskId, target);
+            else this._repairTargets[chip.dataset.systemKey] = target;
+            this.updateDisplay();
+        });
         document.getElementById('task-queue-close-btn').addEventListener('click', () => this.toggleTaskQueueScreen());
 
         document.getElementById('vent-toggle').addEventListener('click',  () => this.toggleVents());
@@ -500,7 +514,8 @@ class StarshipGame {
 
     startRepair(systemKey) {
         if (!this.gameActive || this.gamePaused) return;
-        this.repairManager.startRepair(systemKey);
+        this.repairManager.startRepair(systemKey, this._repairTargets[systemKey]);
+        delete this._repairTargets[systemKey];
         this.updateDisplay();
     }
 
@@ -647,6 +662,9 @@ class StarshipGame {
         this._stopTimer();
         this.timer = setInterval(() => {
             if (this.gamePaused || !this.gameActive) return;
+            // A tutorial step or tip on screen holds the clock (without the pause
+            // menu, so the controls it points at still work).
+            if (this.tour.holdsTime()) return;
             this.gameTime += this.gameSpeed;
             this.systemUpdate.update(this.gameSpeed);
             this.updateDisplay();
@@ -917,7 +935,67 @@ class StarshipGame {
             timerRow.style.display = 'none';
         }
 
+        // After the grace period, coming off rationing costs a one-off
+        // rehydration draw — say so on the card (and how far short the tank
+        // is) rather than leaving a dead button with only a hover tooltip.
+        const resetRow = document.getElementById('freshwater-reset-row');
+        const resetEl  = document.getElementById('freshwater-reset');
+        if (pastGrace) {
+            const cost = this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
+            resetRow.style.display = '';
+            resetEl.textContent = canAffordReset
+                ? `uses ${cost.toFixed(0)} L to rehydrate`
+                : `needs ${cost.toFixed(0)} L in the tank (${Math.ceil(cost - sys.current)} L short)`;
+            resetEl.className = 'rate-value ' + (canAffordReset ? '' : 'rate-neg');
+        } else {
+            resetRow.style.display = 'none';
+        }
+
+        this._displayRationPreview(pastGrace);
         document.getElementById('card-freshwater').className = 'system-card' + this._cardMod(sys.status);
+    }
+
+    // While rationing is on: what full-rate use would be against what the
+    // water maker is producing right now, so the player can judge whether
+    // coming off is sustainable before doing it.
+    _displayRationPreview(pastGrace) {
+        const sys     = this.systems.freshWater;
+        const maker   = this.systems.waterMaker;
+        const boxEl   = document.getElementById('freshwater-preview');
+        if (!boxEl) return;
+
+        // The full-rate figure is always on the card for reference; the rest
+        // of the preview only while rationing is on.
+        const useLhr   = (this.systemUpdate.WATER_NORMAL_L_PER_CREW_DAY * this.crew) / 24;
+        document.getElementById('freshwater-preview-use').textContent = '−' + useLhr.toFixed(3) + ' L/hr';
+        if (!sys.rationing) { boxEl.style.display = 'none'; return; }
+        boxEl.style.display = '';
+
+        const makerLhr = maker.installed ? (maker.outputLhr ?? 0) : 0;
+        const netLhr   = makerLhr - useLhr;
+        const cost     = pastGrace ? this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew : 0;
+        const leftL    = Math.max(0, sys.current - cost); // what the tank holds once the rehydration draw is taken
+
+        const makerEl = document.getElementById('freshwater-preview-maker');
+        makerEl.textContent = !maker.installed ? 'none fitted'
+            : !maker.active ? 'switched off'
+            : '+' + makerLhr.toFixed(3) + ' L/hr';
+        makerEl.className = 'rate-value' + (makerLhr > 0 ? ' rate-pos-good' : '');
+
+        const netEl = document.getElementById('freshwater-preview-net');
+        netEl.textContent = (netLhr >= 0 ? '+' : '−') + Math.abs(netLhr).toFixed(3) + ' L/hr';
+        netEl.className   = 'rate-value ' + (netLhr >= 0 ? 'rate-pos-good' : 'rate-neg');
+
+        const verdictEl = document.getElementById('freshwater-preview-verdict');
+        if (netLhr >= 0) {
+            verdictEl.textContent = 'Sustainable — the water maker covers full use.';
+            verdictEl.className   = 'ration-preview-verdict verdict-good';
+        } else {
+            verdictEl.textContent = leftL > 0
+                ? `Not sustainable — the tank would run dry in ${this._fmtHrs(leftL / -netLhr)}.`
+                : 'Not sustainable — and the tank would be empty straight away.';
+            verdictEl.className   = 'ration-preview-verdict verdict-bad';
+        }
     }
 
     _displayBlackWater() {
@@ -926,7 +1004,26 @@ class StarshipGame {
         document.getElementById('blackwater-indicator').style.left = Math.min(100, sys.level).toFixed(1) + '%';
         document.getElementById('blackwater-liquid').textContent   = sys.liquidL.toFixed(2) + ' L';
         document.getElementById('blackwater-solid').textContent    = sys.solidL.toFixed(2) + ' L';
-        document.getElementById('blackwater-rate').textContent     = '+' + sys.fillRateLhr.toFixed(3) + ' L/hr';
+        const reclaimLhr = sys.reclaimRateLhr ?? 0;
+        document.getElementById('blackwater-reclaim-row').style.display = this.systems.waterMaker.installed ? '' : 'none';
+        document.getElementById('blackwater-reclaim').textContent  = '−' + reclaimLhr.toFixed(3) + ' L/hr';
+
+        // Explains a reclaim figure that's lower than the maker's output: it can
+        // only take liquid, and the liquid has run out.
+        const maker    = this.systems.waterMaker;
+        const solidsEl = document.getElementById('blackwater-solids-note');
+        if (maker.installed && maker.active && sys.reclaimStarved && sys.solidL > 0) {
+            solidsEl.style.display = '';
+            solidsEl.textContent = sys.liquidL < 0.05
+                ? `All the liquid has been reclaimed. The remaining ${sys.solidL.toFixed(1)} L is solid matter the water maker can't process — only dumping clears it.`
+                : `The water maker is reclaiming liquid as fast as it arrives. It can't process the ${sys.solidL.toFixed(1)} L of solid matter — only dumping clears that.`;
+        } else {
+            solidsEl.style.display = 'none';
+        }
+
+        const rateEl = document.getElementById('blackwater-rate');
+        rateEl.textContent = (sys.fillRateLhr >= 0 ? '+' : '−') + Math.abs(sys.fillRateLhr).toFixed(3) + ' L/hr';
+        rateEl.className   = 'rate-value' + (sys.fillRateLhr < 0 ? ' rate-neg-good' : '');
 
         this._setBadge('blackwater-status-badge', sys.status);
         document.getElementById('blackwater-status').innerHTML =
@@ -999,7 +1096,7 @@ class StarshipGame {
         if (!installed) return;
 
         const sourceLabel = {
-            blackWater: 'Reclaiming black water', atmosphere: 'Condensing from outside air',
+            blackWater: 'Reclaiming black water', atmosphere: 'Condensing from outside air (low power)',
             full: 'Fresh tank full', none: sys.active ? 'Nothing to process' : '—',
         }[sys.source ?? 'none'];
         document.getElementById('watermaker-rated').textContent  = (sys.ratedLhr ?? 0).toFixed(2) + ' L/hr';
@@ -1405,13 +1502,32 @@ class StarshipGame {
 
         const planeEl = document.getElementById('comms-plane-views');
         if (planeEl) {
-            planeEl.innerHTML = this._planeSvg('x', 'y', 'Top View (X / Y)') + this._planeSvg('x', 'z', 'Side View (X / Z)');
-            planeEl.querySelectorAll('.comms-marker').forEach(el =>
-                el.addEventListener('click', () => this._selectCommsLocation(el.dataset.commsId))
-            );
+            const html = this._planeSvg('x', 'y', 'Top View (X / Y)') + this._planeSvg('x', 'z', 'Side View (X / Z)');
+            if (this._setHtmlIfChanged(planeEl, html)) {
+                planeEl.querySelectorAll('.comms-marker').forEach(el =>
+                    el.addEventListener('click', () => this._selectCommsLocation(el.dataset.commsId))
+                );
+            }
         }
 
         this._renderCommsDetailsPane();
+    }
+
+    // This screen is refreshed every tick while open (what's in range follows
+    // the transceiver live), so each part only touches the DOM when its markup
+    // has actually changed — otherwise scroll position, hover and half-made
+    // clicks would be thrown away once a second. Returns true if it re-rendered
+    // (i.e. listeners need re-binding). Scroll positions inside survive a real change too.
+    _setHtmlIfChanged(el, html) {
+        if (el._renderedHtml === html) return false;
+        const scrolled = [...el.querySelectorAll('[data-keep-scroll]')].map(node => [node.dataset.keepScroll, node.scrollTop]);
+        el._renderedHtml = html;
+        el.innerHTML = html;
+        scrolled.forEach(([key, top]) => {
+            const node = el.querySelector(`[data-keep-scroll="${key}"]`);
+            if (node) node.scrollTop = top;
+        });
+        return true;
     }
 
     _renderCommsLocationList() {
@@ -1420,11 +1536,11 @@ class StarshipGame {
         const locations = this.commsNav.visibleLocations();
 
         if (!locations.length) {
-            listEl.innerHTML = '<li class="task-empty">No charted locations.</li>';
+            this._setHtmlIfChanged(listEl, '<li class="task-empty">No charted locations.</li>');
             return;
         }
 
-        listEl.innerHTML = locations.map(loc => {
+        const html = locations.map(loc => {
             const selected = loc.id === this._selectedCommsId;
             const dist = loc.kind === 'home' ? null : this.commsNav.distanceFromHome(loc);
             return `
@@ -1435,6 +1551,7 @@ class StarshipGame {
                 </li>`;
         }).join('');
 
+        if (!this._setHtmlIfChanged(listEl, html)) return;
         listEl.querySelectorAll('.comms-location-card').forEach(li =>
             li.addEventListener('click', () => this._selectCommsLocation(li.dataset.commsId))
         );
@@ -1446,7 +1563,7 @@ class StarshipGame {
         const loc = this.commsNav.visibleLocations().find(l => l.id === this._selectedCommsId);
 
         if (!loc) {
-            paneEl.innerHTML = '<p class="task-empty">Select a location to view details.</p>';
+            this._setHtmlIfChanged(paneEl, '<p class="task-empty">Select a location to view details.</p>');
             return;
         }
 
@@ -1454,13 +1571,14 @@ class StarshipGame {
             ? 'You are here'
             : `Distance: ${this.commsNav.distanceFromHome(loc).toFixed(2)} ly`;
 
-        paneEl.innerHTML = `
+        const html = `
             <h3 class="comms-details-title">${loc.name}</h3>
             <div class="comms-details-kind">${this._commsKindLabel(loc.kind)} &middot; ${this.commsNav.locationTypeLabel(loc)}</div>
             <div class="comms-details-coords">XYZ: ${loc.x.toFixed(2)}, ${loc.y.toFixed(2)}, ${loc.z.toFixed(2)}</div>
             <div class="comms-details-distance">${distanceLine}</div>
-            <div class="comms-details-services">${this._commsServicesHtml(loc)}</div>`;
+            <div class="comms-details-services" data-keep-scroll="services">${this._commsServicesHtml(loc)}</div>`;
 
+        if (!this._setHtmlIfChanged(paneEl, html)) return;
         paneEl.querySelectorAll('.market-buy-btn').forEach(btn =>
             btn.addEventListener('click', () => this.buyMarketItem(btn.dataset.listingId))
         );
@@ -1552,6 +1670,16 @@ class StarshipGame {
         const btn       = document.getElementById(`${idPrefix}-repair-btn`);
         const statusEl  = document.getElementById(`${idPrefix}-repair-status`);
 
+        // The "Repair to" chip row lives just above the button; created on first use.
+        let targetsEl = document.getElementById(`${idPrefix}-repair-targets`);
+        if (!targetsEl) {
+            targetsEl = document.createElement('div');
+            targetsEl.id = `${idPrefix}-repair-targets`;
+            targetsEl.className = 'repair-targets';
+            btn.parentNode.insertBefore(targetsEl, btn);
+        }
+        targetsEl.style.display = 'none';
+
         if (sys.destroyed) {
             btn.style.display      = 'none';
             statusEl.style.display = '';
@@ -1559,19 +1687,47 @@ class StarshipGame {
         } else if (task) {
             btn.style.display      = 'none';
             statusEl.style.display = '';
-            statusEl.textContent   = `${task.status === 'in-progress' ? 'Repairing' : 'Queued'} (${task.band}) — ${task.hoursRemaining.toFixed(1)}h left`;
-        } else if (pct >= 95) {
+            const stageTop = this.repairManager._taskStage(task).toPct;
+            statusEl.textContent   = `${task.status === 'in-progress' ? 'Repairing' : 'Queued'}: ${task.band} → ${stageTop}% — ` +
+                `${task.hoursRemaining.toFixed(1)}h left` + (task.targetPct > stageTop ? `, then on to ${task.targetPct}%` : '');
+        } else if (!this.repairManager.canRepair(systemKey)) {
             btn.style.display      = 'none';
             statusEl.style.display = 'none';
         } else {
-            const info = this.repairManager.describeRepair(systemKey);
-            if (!info) { btn.style.display = 'none'; statusEl.style.display = 'none'; return; } // module_specs.json still loading
+            const info = this.repairManager.describeRepair(systemKey, this._repairTargets[systemKey]);
+            if (!info) { btn.style.display = 'none'; statusEl.style.display = 'none'; return; }
             btn.style.display      = '';
             statusEl.style.display = 'none';
-            btn.textContent = info.band === 'replacement'
-                ? `Replace (${info.hours}h, 50% cap, ${Math.round(info.destroyChance * 100)}% destroy risk)`
-                : `Repair — ${info.band === 'major' ? 'Major' : 'Minor'} (${info.hours}h)`;
+            btn.textContent        = this._repairLabel(info);
+
+            // Rebuilt only when something it shows has changed, so a click on a
+            // chip is never lost to the once-a-second re-render.
+            const nowPct = Math.round(this.repairManager.efficiencyFor(systemKey) * 100);
+            const html   = this._repairTargetChips(systemKey, info.targetPct) +
+                `<div class="repair-target-note">Output now ${nowPct}% of rated &rarr; ${Math.round(info.efficiency * 100)}% at ${info.targetPct}%</div>`;
+            if (targetsEl.dataset.html !== html) { targetsEl.innerHTML = html; targetsEl.dataset.html = html; }
+            targetsEl.style.display = '';
         }
+    }
+
+    _fmtRepairHours(hours) {
+        return (+hours.toFixed(1)) + 'h';
+    }
+
+    // "Repair to 80% (9.2h)" — plus the risk, if any stage on the way can wreck the module.
+    _repairLabel(info) {
+        return `Repair to ${info.targetPct}% (${this._fmtRepairHours(info.hours)})` +
+            (info.destroyChance > 0 ? ` — ${Math.round(info.destroyChance * 100)}% destroy risk` : '');
+    }
+
+    // One chip per level the repair could stop at. `taskId` makes the chips
+    // retarget that queued task instead of choosing for a not-yet-ordered repair.
+    _repairTargetChips(systemKey, activePct, taskId = null) {
+        const chips = this.repairManager.targetOptions(systemKey).map(o => `
+            <button class="repair-target-chip${o.targetPct === activePct ? ' chip-active' : ''}"
+                    data-system-key="${systemKey}" data-target="${o.targetPct}"${taskId ? ` data-task-id="${taskId}"` : ''}
+                    title="${o.stageName}: ${this._fmtRepairHours(o.hours)} in total, ${Math.round(o.efficiency * 100)}% of rated output">${o.targetPct}%</button>`).join('');
+        return `<div class="repair-target-row"><span class="repair-target-label">Repair to</span>${chips}</div>`;
     }
 
     _repairSystemLabel(systemKey) {
@@ -1591,16 +1747,15 @@ class StarshipGame {
         const rows = this.repairManager.repairableKeys()
             .filter(key => this.repairManager.canRepair(key))
             .map(key => {
-                const info = this.repairManager.describeRepair(key);
-                if (!info) return null; // module_specs.json still loading
-                const desc = info.band === 'replacement'
-                    ? `Replace (${info.hours}h, 50% cap, ${Math.round(info.destroyChance * 100)}% destroy risk)`
-                    : `Repair — ${info.band === 'major' ? 'Major' : 'Minor'} (${info.hours}h)`;
+                const info = this.repairManager.describeRepair(key, this._repairTargets[key]);
+                if (!info) return null;
+                const nowPct = Math.round(this.repairManager.efficiencyFor(key) * 100);
                 return `
                     <li class="task-card task-card-static" data-system-key="${key}">
                         <div class="task-info">
-                            <div class="task-title">${this._repairSystemLabel(key)}</div>
-                            <div class="task-meta">${desc}</div>
+                            <div class="task-title">${this._repairSystemLabel(key)} &mdash; ${Math.round(this.systems[key].repairPct ?? 100)}%</div>
+                            <div class="task-meta">${this._repairLabel(info)} &middot; output ${nowPct}% &rarr; ${Math.round(info.efficiency * 100)}%</div>
+                            ${this._repairTargetChips(key, info.targetPct)}
                         </div>
                         <button class="repair-btn repair-available-btn" data-system-key="${key}">Add to Queue</button>
                     </li>`;
@@ -1641,14 +1796,18 @@ class StarshipGame {
         }
 
         listEl.innerHTML = this.repairQueue.map(task => {
-            const progressPct = Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours)));
+            const progressPct = task.totalHours > 0
+                ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
+            const stageTop = this.repairManager._taskStage(task).toPct;
+            const toTarget = this.repairManager.remainingHours(task);
             return `
                 <li class="task-card" draggable="true" data-task-id="${task.id}">
                     <span class="task-drag-handle">&#10495;</span>
                     <div class="task-info">
-                        <div class="task-title">${this._repairSystemLabel(task.systemKey)} &mdash; ${task.band}</div>
+                        <div class="task-title">${this._repairSystemLabel(task.systemKey)} &mdash; ${task.band} &rarr; ${stageTop}%</div>
                         <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
-                        <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${task.totalHours}h</div>
+                        <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; this stage ${task.hoursRemaining.toFixed(1)}h / ${this._fmtRepairHours(task.totalHours)} &middot; ${this._fmtRepairHours(toTarget)} to reach ${task.targetPct}%</div>
+                        ${this._repairTargetChips(task.systemKey, task.targetPct, task.id)}
                     </div>
                     <button class="task-cancel-btn" data-task-id="${task.id}">Cancel</button>
                 </li>`;
