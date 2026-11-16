@@ -49,12 +49,19 @@
     <div id="game-container" class="game-container" style="display: none;">
         <header class="game-header">
             <div class="header-top">
-                <div class="ship-identity">
-                    <img id="ship-thumb" src="assets/ships/vagrant-mk1.svg" class="ship-thumb" alt="Ship"/>
-                    <div class="ship-info">
-                        <span class="ship-name" id="ship-name">STRAY LIGHT</span>
-                        <span class="ship-class" id="ship-class">Vagrant Mk.I &middot; Pell-Dyne Systems</span>
-                        <span class="ship-reg" id="ship-reg">PDR-4471-K</span>
+                <div class="header-left">
+                    <div class="header-location" id="header-location">
+                        <span class="location-caption">Current Location</span>
+                        <span class="location-name" id="location-name">&mdash;</span>
+                        <span class="location-type" id="location-type"></span>
+                    </div>
+                    <div class="ship-identity">
+                        <img id="ship-thumb" src="assets/ships/vagrant-mk1.svg" class="ship-thumb" alt="Ship"/>
+                        <div class="ship-info">
+                            <span class="ship-name" id="ship-name">STRAY LIGHT</span>
+                            <span class="ship-class" id="ship-class">Vagrant Mk.I &middot; Pell-Dyne Systems</span>
+                            <span class="ship-reg" id="ship-reg">PDR-4471-K</span>
+                        </div>
                     </div>
                 </div>
                 <div class="header-right">
@@ -63,6 +70,12 @@
                         <div class="stat"><span id="timer">00:00</span> ship time</div>
                         <div class="stat">Credits: <span id="credits">1000</span></div>
                         <div class="stat stat-clickable" id="crew-stat">Crew: <span id="crew">1</span></div>
+                        <div class="stat stat-clickable" id="tour-btn" role="button" title="Replay the tutorial">Tour</div>
+                    </div>
+                    <!-- Crew speaking up: on a long roster, on shift, nothing to do (main.js _displayCrewIdleNote) -->
+                    <div class="crew-idle-note" id="crew-idle-note" style="display:none">
+                        <span class="crew-idle-text" id="crew-idle-text" title="Open Crew to change shifts"></span>
+                        <button class="crew-idle-dismiss" id="crew-idle-dismiss" title="Dismiss">&times;</button>
                     </div>
                     <div class="speed-controls">
                         <span class="speed-label">Speed:</span>
@@ -71,9 +84,12 @@
                         <button class="speed-btn" id="speed-100x">100&times;</button>
                         <button class="speed-btn" id="speed-1000x">1000&times;</button>
                     </div>
-                    <button id="repair-queue-btn" class="repair-queue-btn">Repair Queue</button>
-                    <button id="comms-nav-btn" class="repair-queue-btn">Comms &amp; Nav</button>
-                    <span id="save-status" class="save-status"></span>
+                    <!-- Comms & Nav is opened from the Transceiver card, not from here. -->
+                    <div class="header-actions">
+                        <span id="save-status" class="save-status"></span>
+                        <button id="repair-queue-btn" class="repair-queue-btn">Repair Queue</button>
+                        <button id="ship-capacity-btn" class="repair-queue-btn">Ship Capacity</button>
+                    </div>
                 </div>
             </div>
         </header>
@@ -249,9 +265,16 @@
                             <span class="rate-label">CO&#8322; unit draw:</span>
                             <span class="rate-value" id="power-co2-draw">0 W</span>
                         </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Other systems draw:</span>
+                            <span class="rate-value" id="power-other-draw">0 W</span>
+                        </div>
                         <div class="rate-row rate-net-row">
                             <span class="rate-label">Battery net rate:</span>
                             <span class="rate-value" id="power-rate">0 Wh/hr</span>
+                        </div>
+                        <div class="rate-row" id="power-shortfall-row" style="display:none">
+                            <span class="rate-value rate-neg" id="power-shortfall"></span>
                         </div>
                     </div>
                     <div class="auto-row">
@@ -345,6 +368,10 @@
                             <span class="rate-label">Crew consumption:</span>
                             <span class="rate-value" id="freshwater-rate">&#8722;0.000 L/hr</span>
                         </div>
+                        <div class="rate-row" id="freshwater-maker-row" style="display:none">
+                            <span class="rate-label">Water maker:</span>
+                            <span class="rate-value rate-pos-good" id="freshwater-maker">+0.000 L/hr</span>
+                        </div>
                         <div class="rate-row rate-net-row">
                             <span class="rate-label">Est. time to empty:</span>
                             <span class="rate-value" id="freshwater-runtime">&mdash;</span>
@@ -359,7 +386,7 @@
                         <button id="water-ration-toggle" class="toggle-btn btn-off" title="">Enable Rationing</button>
                     </div>
                     <div class="system-info">
-                        <span>Manual top-up only &mdash; no water makers yet</span>
+                        <span id="freshwater-info">No water maker fitted</span>
                     </div>
                 </div>
 
@@ -402,12 +429,121 @@
                             <span class="rate-label">Fill rate:</span>
                             <span class="rate-value" id="blackwater-rate">+0.000 L/hr</span>
                         </div>
+                        <div class="rate-row" id="blackwater-exposure-row" style="display:none">
+                            <span class="rate-value rate-neg" id="blackwater-exposure"></span>
+                        </div>
                     </div>
                     <div class="system-controls">
                         <span id="blackwater-status">Tank: <strong>0%</strong> full</span>
                         <button id="blackwater-dump-btn" class="toggle-btn btn-off">Dump to Space</button>
                     </div>
+                    <div class="system-info">
+                        <span>Each dump is fined <span id="blackwater-fine">100</span> credits. A full tank makes the crew ill.</span>
+                    </div>
                 </div>
+
+                <!-- Transceiver -->
+                <div class="system-card" id="card-transceiver">
+                    <div class="card-header">
+                        <h3>Transceiver</h3>
+                        <span class="status-badge badge-warning" id="transceiver-status-badge">WARNING</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="transceiver-level">0.00 ly</span>
+                        <span class="value-label">comms range</span>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="gauge-track resource-zones">
+                            <div class="gauge-indicator" id="transceiver-indicator" style="left: 0%"></div>
+                        </div>
+                        <div class="gauge-scale">
+                            <span style="left:0%">0</span>
+                            <span style="left:12.5%">0.25</span>
+                            <span style="left:50%">1</span>
+                            <span style="left:100%">2 ly</span>
+                        </div>
+                    </div>
+                    <div class="zone-legend">
+                        <span class="legend-item legend-red">&#9632; No contact</span>
+                        <span class="legend-item legend-amber">&#9632; Local network</span>
+                        <span class="legend-item legend-green">&#9632; Nearby space</span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Transmit / receive power:</span>
+                            <span class="rate-value" id="transceiver-transmit">0.00 W of 2.00 W</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Power draw:</span>
+                            <span class="rate-value" id="transceiver-draw">0.00 W</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Local network:</span>
+                            <span class="rate-value" id="transceiver-local">Out of range</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Other contacts in range:</span>
+                            <span class="rate-value" id="transceiver-contacts">0</span>
+                        </div>
+                    </div>
+                    <div class="system-controls">
+                        <span id="transceiver-status">Transceiver: <strong>OFF</strong></span>
+                        <button id="transceiver-toggle" class="toggle-btn btn-off">Enable Transceiver</button>
+                    </div>
+                    <button id="comms-nav-btn" class="repair-queue-btn card-action-btn">Open Comms &amp; Nav</button>
+                    <div class="repair-panel">
+                        <div class="repair-row">
+                            <span class="repair-pct" id="transceiver-repair-pct">Repair: 100%</span>
+                            <span class="repair-status" id="transceiver-repair-status" style="display:none"></span>
+                        </div>
+                        <div class="repair-track"><div class="repair-fill repair-good" id="transceiver-repair-fill" style="width:100%"></div></div>
+                        <button id="transceiver-repair-btn" class="repair-btn" style="display:none">Repair</button>
+                    </div>
+                </div>
+
+                <!-- Water Maker (not fitted on a new ship — bought from a market) -->
+                <div class="system-card" id="card-watermaker">
+                    <div class="card-header">
+                        <h3>Water Maker</h3>
+                        <span class="status-badge badge-warning" id="watermaker-status-badge">NOT FITTED</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="watermaker-level">&mdash;</span>
+                        <span class="value-label" id="watermaker-level-label">not fitted</span>
+                    </div>
+                    <div class="system-info" id="watermaker-missing">
+                        <span>No water maker aboard. Buy one from the local market in Comms &amp; Nav &mdash; the transceiver has to reach the local network first.</span>
+                    </div>
+                    <div id="watermaker-fitted" class="card-section" style="display:none">
+                        <div class="rate-panel">
+                            <div class="rate-row">
+                                <span class="rate-label">Rated output:</span>
+                                <span class="rate-value" id="watermaker-rated">0.00 L/hr</span>
+                            </div>
+                            <div class="rate-row">
+                                <span class="rate-label">Source:</span>
+                                <span class="rate-value" id="watermaker-source">&mdash;</span>
+                            </div>
+                            <div class="rate-row rate-net-row">
+                                <span class="rate-label">Power draw:</span>
+                                <span class="rate-value" id="watermaker-draw">0.00 W</span>
+                            </div>
+                        </div>
+                        <div class="system-controls">
+                            <span id="watermaker-status">Water maker: <strong>OFF</strong></span>
+                            <button id="watermaker-toggle" class="toggle-btn btn-off">Enable Water Maker</button>
+                        </div>
+                        <div class="repair-panel">
+                            <div class="repair-row">
+                                <span class="repair-pct" id="watermaker-repair-pct">Repair: 100%</span>
+                                <span class="repair-status" id="watermaker-repair-status" style="display:none"></span>
+                            </div>
+                            <div class="repair-track"><div class="repair-fill repair-good" id="watermaker-repair-fill" style="width:100%"></div></div>
+                            <button id="watermaker-repair-btn" class="repair-btn" style="display:none">Repair</button>
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
                 <!-- Environment / Vent Panel -->
@@ -494,6 +630,7 @@
                 <h2>Comms &amp; Nav <span class="comms-seed-label" id="comms-seed-label"></span></h2>
                 <button id="comms-nav-close-btn" class="overlay-close-btn">&times;</button>
             </div>
+            <p class="repair-crew-status" id="comms-range-status"></p>
             <div class="comms-nav-body">
                 <ul id="comms-location-list" class="overlay-list comms-location-list">
                     <li class="task-empty">No charted locations.</li>
@@ -506,11 +643,87 @@
         </div>
     </div>
 
+    <div id="ship-capacity-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <h2>Ship Capacity</h2>
+                <button id="ship-capacity-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+
+            <div class="capacity-ship-row">
+                <img id="capacity-ship-img" src="assets/ships/vagrant-mk1.svg" class="capacity-ship-img" alt="Ship"/>
+                <div class="capacity-ship-info">
+                    <span class="capacity-ship-name" id="capacity-ship-name">Stray Light</span>
+                    <span class="capacity-ship-class" id="capacity-ship-class">Vagrant Mk.I</span>
+                </div>
+            </div>
+
+            <div class="main-value">
+                <span class="value-large" id="capacity-mass-level">0 kg</span>
+                <span class="value-label">of <span id="capacity-mass-max">0</span> kg max mass</span>
+            </div>
+            <div class="gauge-container">
+                <div class="gauge-track resource-zones-inverted">
+                    <div class="gauge-indicator" id="capacity-mass-indicator" style="left: 0%"></div>
+                </div>
+                <div class="gauge-scale">
+                    <span style="left:0%">0%</span>
+                    <span style="left:70%">70%</span>
+                    <span style="left:90%">90%</span>
+                    <span style="left:100%">100%</span>
+                </div>
+            </div>
+
+            <div class="main-value">
+                <span class="value-large" id="capacity-volume-level">0.00 m&#179;</span>
+                <span class="value-label">of <span id="capacity-volume-max">0</span> m&#179; volume used</span>
+            </div>
+            <div class="gauge-container">
+                <div class="gauge-track resource-zones-inverted">
+                    <div class="gauge-indicator" id="capacity-volume-indicator" style="left: 0%"></div>
+                </div>
+                <div class="gauge-scale">
+                    <span style="left:0%">0%</span>
+                    <span style="left:70%">70%</span>
+                    <span style="left:90%">90%</span>
+                    <span style="left:100%">100%</span>
+                </div>
+            </div>
+
+            <h3 class="overlay-section-title">Installed Components</h3>
+            <ul id="capacity-breakdown" class="overlay-list">
+                <li class="task-empty">Loading&hellip;</li>
+            </ul>
+
+            <div class="system-info">
+                <span>Free: <strong id="capacity-mass-free">0 kg</strong> mass &middot; <strong id="capacity-volume-free">0.00 m&#179;</strong> volume</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Guided tutorial (tour.js). The layer itself ignores the mouse so the
+         spotlighted control underneath stays clickable; only the card takes clicks. -->
+    <div id="tour-layer" class="tour-layer" style="display: none;">
+        <div id="tour-spotlight" class="tour-spotlight"></div>
+        <div id="tour-card" class="tour-card" role="dialog" aria-labelledby="tour-title">
+            <div class="tour-step-count" id="tour-step-count"></div>
+            <h3 class="tour-title" id="tour-title"></h3>
+            <div class="tour-body" id="tour-body"></div>
+            <div class="tour-hint" id="tour-hint"></div>
+            <div class="tour-actions">
+                <button id="tour-skip-btn" class="tour-link-btn">Skip tour</button>
+                <button id="tour-skip-step-btn" class="tour-link-btn">Skip step</button>
+                <button id="tour-next-btn" class="tour-next-btn">Next</button>
+            </div>
+        </div>
+    </div>
+
     <script src="game_state.js"></script>
     <script src="system_update.js"></script>
     <script src="repair_manager.js"></script>
     <script src="crew_manager.js"></script>
     <script src="comms_nav.js"></script>
+    <script src="tour.js"></script>
     <script src="main.js"></script>
 </body>
 </html>

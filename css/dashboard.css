@@ -259,6 +259,36 @@
     );
 }
 
+/* ── Ship Capacity card ── */
+.capacity-ship-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.capacity-ship-img {
+    width: 76px;
+    height: 36px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 5px rgba(79, 195, 247, 0.35));
+    flex-shrink: 0;
+}
+.capacity-ship-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.capacity-ship-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #4fc3f7;
+    letter-spacing: 1px;
+}
+.capacity-ship-class {
+    font-size: 0.68rem;
+    color: #78909c;
+    font-style: italic;
+}
+
 /* Needle */
 .gauge-indicator {
     position: absolute;
@@ -872,3 +902,213 @@
 .comms-details-coords { font-size: 0.82rem; color: #90a4ae; font-family: monospace; }
 .comms-details-distance { font-size: 0.9rem; color: #e0f7fa; font-weight: 600; }
 .comms-details-placeholder { margin-top: auto; padding-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+
+/* ── Header: current location readout (far left, ahead of the ship identity) ── */
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    flex-wrap: wrap;
+}
+.header-location {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding-right: 22px;
+    border-right: 1px solid rgba(0, 150, 255, 0.25);
+}
+.location-caption {
+    font-size: 0.62rem;
+    color: #546e7a;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.location-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #e0f7fa;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    line-height: 1.1;
+}
+.location-type {
+    font-size: 0.72rem;
+    color: #81c784;
+    letter-spacing: 0.5px;
+}
+@media (max-width: 700px) {
+    .header-left     { flex-direction: column; }
+    .header-location { padding-right: 0; border-right: none; align-items: center; }
+}
+
+/* ── Guided tour (tour.js) ──
+   Sits above every overlay screen (z-index 1000). The layer and spotlight
+   ignore the mouse so the highlighted control stays clickable; the dimming is
+   the spotlight's own oversized box-shadow, which is what cuts the "hole". ── */
+.tour-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    pointer-events: none;
+}
+.tour-spotlight {
+    position: fixed;
+    border-radius: 10px;
+    box-shadow: 0 0 0 3px rgba(79, 195, 247, 0.95), 0 0 18px 4px rgba(79, 195, 247, 0.5), 0 0 0 9999px rgba(3, 8, 25, 0.62);
+    transition: left 0.2s ease, top 0.2s ease, width 0.2s ease, height 0.2s ease;
+}
+.tour-card {
+    position: fixed;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    pointer-events: auto;
+    background: rgba(8, 15, 40, 0.98);
+    border: 1px solid rgba(79, 195, 247, 0.6);
+    border-radius: 14px;
+    padding: 16px 18px 14px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.tour-step-count {
+    font-size: 0.65rem;
+    color: #546e7a;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+}
+.tour-title {
+    color: #4fc3f7;
+    font-size: 1.05rem;
+    letter-spacing: 0.5px;
+}
+.tour-body {
+    font-size: 0.84rem;
+    line-height: 1.5;
+    color: #c8e6ff;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.tour-body strong { color: #e0f7fa; }
+.tour-hint {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #ffb74d;
+}
+.tour-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 4px;
+}
+.tour-next-btn {
+    margin-left: auto;
+    padding: 6px 20px;
+    font-size: 0.82rem;
+}
+.tour-link-btn {
+    background: none;
+    border: none;
+    padding: 4px 0;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #78909c;
+    text-decoration: underline;
+}
+.tour-link-btn:hover { background: none; color: #e0f7fa; transform: none; box-shadow: none; }
+#tour-skip-step-btn { margin-left: auto; }
+
+/* ── Unpowered devices, unfitted modules ── */
+.no-power { color: #ef5350; font-weight: 700; letter-spacing: 0.5px; }
+.card-section { display: flex; flex-direction: column; gap: 12px; }
+.system-card.card-unfitted { opacity: 0.75; border-style: dashed; }
+
+/* ── Crew: shift-length summary ── */
+.crew-duty-warning  { color: #ffb74d; }
+.crew-duty-critical { color: #ef5350; font-weight: 600; }
+
+/* ── Comms & Nav: local services (market + news) ── */
+.comms-details-services {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 46vh;
+}
+.comms-services-title { font-size: 0.74rem; color: #90a4ae; text-transform: uppercase; letter-spacing: 1px; }
+.market-credits { font-size: 0.78rem; color: #78909c; }
+.market-credits strong { color: #e0f7fa; }
+.market-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.market-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+}
+.market-info { display: flex; flex-direction: column; gap: 2px; }
+.market-name { font-size: 0.85rem; color: #e0f7fa; font-weight: 600; }
+.market-meta { font-size: 0.72rem; color: #90a4ae; }
+.market-risk { color: #ffb74d; }
+.market-blocker { font-size: 0.68rem; color: #78909c; font-style: italic; }
+.market-buy-btn { white-space: nowrap; flex-shrink: 0; }
+.market-buy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Crew idle note: a speech bubble hanging off the header's Crew counter ── */
+.crew-idle-note {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 380px;
+    margin-right: 64px; /* sits under the Crew counter rather than the Tour pill */
+    padding: 6px 10px 6px 12px;
+    background: rgba(255, 167, 38, 0.14);
+    border: 1px solid rgba(255, 167, 38, 0.5);
+    border-radius: 10px;
+    font-size: 0.76rem;
+    color: #ffe0b2;
+    line-height: 1.35;
+}
+.crew-idle-note::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    right: 26px;
+    width: 10px;
+    height: 10px;
+    background: #2a2416;
+    border-left: 1px solid rgba(255, 167, 38, 0.5);
+    border-top: 1px solid rgba(255, 167, 38, 0.5);
+    transform: rotate(45deg);
+}
+.crew-idle-text { cursor: pointer; }
+.crew-idle-text:hover { text-decoration: underline; }
+.crew-idle-dismiss {
+    background: none;
+    border: none;
+    padding: 0 2px;
+    font-size: 1rem;
+    line-height: 1;
+    color: #ffb74d;
+}
+.crew-idle-dismiss:hover { background: none; color: #fff3e0; transform: none; box-shadow: none; }
+
+/* ── Header action row (Repair Queue / Ship Capacity side by side, save status alongside) ── */
+.header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* ── Full-width action button inside a system card (e.g. Open Comms & Nav on the Transceiver) ── */
+.card-action-btn { width: 100%; padding: 8px 14px; font-size: 0.82rem; }

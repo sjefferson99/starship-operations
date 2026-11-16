@@ -5,6 +5,8 @@
       "1": {
         "powerDrawW": 21,
         "outputLhr": 22.5,
+        "massKg": 45,
+        "volumeM3": 0.5,
         "degradationPctPerHr": 0.14,
         "repair": {
           "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
@@ -17,6 +19,8 @@
       "1": {
         "powerDrawW": 21,
         "outputLhr": 18.0,
+        "massKg": 38,
+        "volumeM3": 0.45,
         "degradationPctPerHr": 0.14,
         "repair": {
           "minor":       { "minPct": 50, "maxPct": 95, "hours": 3,  "restorePct": 100 },
@@ -29,11 +33,42 @@
       "1": {
         "outputW": 142,
         "fuelLhr": 0.01,
+        "massKg": 65,
+        "volumeM3": 0.7,
         "degradationPctPerHr": 0.14,
         "repair": {
           "minor":       { "minPct": 50, "maxPct": 95, "hours": 4,  "restorePct": 100 },
           "major":       { "minPct": 20, "maxPct": 50, "hours": 14, "restorePct": 100 },
           "replacement": { "minPct": 0,  "maxPct": 20, "hours": 14, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
+        }
+      }
+    },
+    "transceiver": {
+      "1": {
+        "powerDrawW": 4,
+        "transmitW": 2.0,
+        "rangeLyPerW": 1.0,
+        "massKg": 6,
+        "volumeM3": 0.05,
+        "degradationPctPerHr": 0.002,
+        "repair": {
+          "minor":       { "minPct": 50, "maxPct": 95, "hours": 2, "restorePct": 100 },
+          "major":       { "minPct": 20, "maxPct": 50, "hours": 6, "restorePct": 100 },
+          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 6, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
+        }
+      }
+    },
+    "waterMaker": {
+      "1": {
+        "powerDrawW": 30,
+        "outputLhr": 6.0,
+        "massKg": 24,
+        "volumeM3": 0.2,
+        "degradationPctPerHr": 0.14,
+        "repair": {
+          "minor":       { "minPct": 50, "maxPct": 95, "hours": 3, "restorePct": 100 },
+          "major":       { "minPct": 20, "maxPct": 50, "hours": 8, "restorePct": 100 },
+          "replacement": { "minPct": 0,  "maxPct": 20, "hours": 8, "restorePct": 50, "degradationMultiplier": 10, "destroyChance": 0.2 }
         }
       }
     }

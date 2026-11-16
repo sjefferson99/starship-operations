@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `game_state.js` → `system_update.js` →
-`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `main.js`. That order is load-bearing —
+`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `main.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -28,11 +28,35 @@ changing state shape, grep for every reader, don't assume one file owns a field.
 **The tick loop is the heart of the simulation** (`main.js`'s `_startTimer`): every real second,
 if not paused, `gameTime` advances by `gameSpeed` (1/10/100/1000×) and that same value is passed
 as `dt` (game-seconds elapsed) into `SystemUpdate.update(dt)`, which runs O2 → CO2 →
-power/fuel → crew health → repair decay → repair-queue processing → status thresholds, in that
-fixed order, then `main.js` does a full imperative DOM re-render (no diffing). Because `dt` can be
+transceiver → water (incl. water maker) → power/fuel → crew health → repair decay → repair-queue
+processing → status thresholds, in that fixed order (preceded by the power-budget calculation
+described below), then `main.js` does a full imperative DOM re-render (no diffing). Because `dt` can be
 as large as 1000 at high speed, any new per-tick calculation needs to be safe against one huge
 step — see the CO2-vent-overshoot fix in `system_update.js` for the pattern (clamp to the
 equilibrium target instead of letting a big tick blow through it).
+
+**Nothing electrical runs without power.** `SystemUpdate._computePowerBudget(dt)` runs first each
+tick and sets `systems.power.powerFraction` (0–1): the share of the tick's total rated electrical
+demand that the battery plus this tick's generator output can actually cover. Every powered module
+(O2 generator, CO2 scrubber, transceiver, water maker — the list is `_poweredDevices()`) scales its
+output by that fraction, so a flat battery means zero output regardless of the module's own on/off
+switch, and a shortfall is a proportional brownout. It is deliberately an energy-over-the-tick
+calculation rather than a `battery > 0` check, for the same large-`dt` reason as above. A new powered
+module must be added to `_poweredDevices()` and multiply its output by `_powerFraction()`.
+
+**Modules are the five keys `RepairManager.repairableKeys()` returns** (`transceiver`, `power`,
+`o2`, `co2`, `waterMaker`) — each has `repairPct`/`juryRigged`/`destroyed` and a tiered spec in
+`module_specs.json`. `installed === false` (only the water maker, until one is bought) hides a
+module from repair, decay, power demand and ship capacity. The **transceiver**'s range is
+`transmitW × rangeLyPerW × efficiency`; `CommsNav` turns that range into what is visible
+(`visibleLocations()`, `hasLocalDetails()`) — the current location's market/news first, then other
+contacts once range covers their distance. Visibility is derived live, never remembered, so an
+unpowered or switched-off transceiver shows nothing but the ship's own position. The **market**
+(`game.market`, seeded alongside the sector in `CommsNav.generate`) is a list of salvaged modules;
+`CommsNav.purchaseBlocker()`/`purchase()` hold every buying rule (on-planet only, local network in
+range, enough credits, and a module slot that is empty or destroyed). The **water maker** reclaims
+black-water liquid into fresh water first and, in a breathable atmosphere, makes up the rest from
+outside air.
 
 **Saves are named slots, not one implicit save.** New Game always starts from pure
 `_defaultSystems()` defaults (never resumes from a prior save) and prompts for a name via a
@@ -48,7 +72,8 @@ never edit a shipped one; ship-scoped tables (`ships`, `ship_atmosphere`, `ship_
 `ship_battery`, `ship_fuel`) all key on `(save_id, ship_id, ...)` since the same `ship_id`
 (`'player-ship-1'`) recurs across every save. `crew_members` is keyed on `(save_id, id)` instead
 (not ship-scoped — crew belongs to the save) and holds the live roster state described below.
-`comms_locations` follows the same `(save_id, id)` shape for the Comms & Nav sector roster.
+`comms_locations` follows the same `(save_id, id)` shape for the Comms & Nav sector roster, as does
+`market_listings` for the market's remaining stock.
 Static reference data (`ship_classes.json`,
 `module_specs.json`, `crew_manifest.json`, `story_messages.json`) is untouched by any of
 this — still fetched read-only, never written by the server, deliberately kept as
@@ -73,7 +98,13 @@ health based on continuous O2-low/CO2-high severity (reusing the same threshold 
 `SystemUpdate._updateStatuses`) plus a per-member `varianceFactor` rolled once at creation, so
 crew don't all decline in lockstep. Health <20% marks a member unavailable for repair work
 (`isAvailable`); health hitting 0 sets `dead: true` permanently — there's no reviving a dead
-crew member even if the environment recovers. `this.crew` (the headcount driving O2/CO2
+crew member even if the environment recovers. Two further health sources live here: **overwork**
+is per member, from scheduled hours per day (`dutyHours`, overlaps counted once) — free to 8h, only
+slower work to 12h (`fatigueWorkFactor`), and beyond that health is pulled down to a ceiling
+(`fatigueHealthCap`) that falls non-linearly to 0 at 24h; and **sewage exposure** while the black
+water tank is full (`blackWater.exposureHours`), an immediate drain that steepens hourly plus a
+rising per-hour chance of a lump-damage infection. Dumping the tank resets exposure and costs a
+flat fine (`BLACK_WATER_DUMP_FINE` in `main.js`), which may take credits negative. `this.crew` (the headcount driving O2/CO2
 consumption) is just `crewManager.aliveCount()`, re-synced once per tick.
 
 **Comms & Nav (`comms_nav.js`, `CommsNav`)** procedurally generates the small sector roster shown
@@ -90,6 +121,21 @@ and read by the dashboard — the seed itself is kept only for display, generati
 from it after creation. The dashboard renders two orthographic plane views (Top X/Y, Side X/Z) as
 plain inline SVG rather than attempting true 3D — there's no rendering library in this codebase
 and a hand-rolled 3D projection wasn't worth the payoff for three points.
+
+**Tips share the tour's card.** `Tour._buildTips()` is a priority-ordered list of
+`{id, when(game), target, title, body}`; `checkTips()` runs once per tick from `main.js` and shows
+the first due tip not yet seen for this save (`localStorage`, keyed by save id). Anything that only
+becomes relevant hours into a game belongs there, not in the linear tour.
+
+**The guided tour (`tour.js`, `Tour`)** auto-starts on a player's first New Game (a
+`localStorage` flag, `starshipOps.tourSeen`, records that it's been finished or skipped) and can be
+replayed from the header's Tour button. Steps are a plain array in `_buildSteps()`: each spotlights a
+real element by CSS selector and either waits on a `done(game)` predicate — the player performs the
+real action, the tour never changes gameplay state itself — or shows a Next button. The shared
+Playwright `page` fixture in `tests/helpers.js` pre-sets the seen flag (and switches tips off) so the
+card never covers controls other specs click; `tests/tour.spec.js` clears them again. Specs about
+Comms & Nav call `bringCommsOnline(page)` from the same helpers, since a new ship's transceiver
+reaches nothing.
 
 **`window.game`** is deliberately exposed in `main.js` so `tests/*.spec.js` can drive internal
 state directly in a real browser via Playwright, rather than re-implementing game logic in the

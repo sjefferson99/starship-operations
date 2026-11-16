@@ -38,6 +38,10 @@ class StarshipGame {
         this.commsLocations = [];
         this._selectedCommsId = null;
         this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
+        this.market           = [];   // items for sale (CommsNav owns generation + purchase rules)
+
+        // Every black water dump is detected and fined, no matter where you are.
+        this.BLACK_WATER_DUMP_FINE = 100;
 
         this.launchScreen   = document.getElementById('launch-screen');
         this.gameContainer  = document.getElementById('game-container');
@@ -48,6 +52,7 @@ class StarshipGame {
         this.loadScreen      = document.getElementById('load-screen');
         this.crewScreen      = document.getElementById('crew-screen');
         this.commsNavScreen  = document.getElementById('comms-nav-screen');
+        this.shipCapacityScreen = document.getElementById('ship-capacity-screen');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
@@ -58,6 +63,7 @@ class StarshipGame {
         this.commsNav        = new CommsNav(this);
         this.repairManager = new RepairManager(this);
         this.systemUpdate   = new SystemUpdate(this);
+        this.tour           = new Tour(this);
         this._bindEvents();
         this._loadShipDatabases();
         this.setBackground('space');
@@ -90,9 +96,24 @@ class StarshipGame {
                 level: 10, status: 'Warning', active: false,
                 capacity: 1000, current: 100,
                 count: 1, tier: 1,
-                genOutputW: 0, o2DrawW: 0, co2DrawW: 0, netWhr: 0,
+                genOutputW: 0, o2DrawW: 0, co2DrawW: 0, otherDrawW: 0, netWhr: 0,
+                powerFraction: 1, // share of electrical demand actually being met (SystemUpdate._computePowerBudget)
                 target: 80.0,
                 repairPct: 25, juryRigged: false, destroyed: false,
+            },
+            // Comms transceiver: range scales with repair level (CommsNav decides what that reveals).
+            transceiver: {
+                status: 'Warning', active: false,
+                count: 1, tier: 1,
+                transmitW: 0, rangeLy: 0, drawW: 0,
+                repairPct: 25, juryRigged: false, destroyed: false, installed: true,
+            },
+            // Water maker: not fitted on a new ship — bought from a market, in whatever state it's sold.
+            waterMaker: {
+                status: 'Normal', active: false,
+                count: 1, tier: 1,
+                outputLhr: 0, drawW: 0, source: 'none',
+                repairPct: 100, juryRigged: false, destroyed: false, installed: false,
             },
             fuel: {
                 level: 10, status: 'Warning',
@@ -112,6 +133,7 @@ class StarshipGame {
                 capacity: 100, current: 0,
                 liquidL: 0, solidL: 0,
                 liquidRateLhr: 0, solidRateLhr: 0, fillRateLhr: 0,
+                exposureHours: 0, // how long the tank has been full and backing up into the cabin
             },
         };
     }
@@ -127,8 +149,16 @@ class StarshipGame {
         document.getElementById('load-screen-close-btn').addEventListener('click', () => this._closeLoadScreen());
         document.getElementById('crew-stat').addEventListener('click',          () => this._openCrewScreen());
         document.getElementById('crew-screen-close-btn').addEventListener('click', () => this._closeCrewScreen());
+        document.getElementById('crew-idle-text').addEventListener('click',     () => this._openCrewScreen());
+        document.getElementById('crew-idle-dismiss').addEventListener('click',  () => {
+            this._crewIdleNoteDismissed = true;
+            this._displayCrewIdleNote();
+        });
         document.getElementById('comms-nav-btn').addEventListener('click',         () => this._openCommsNavScreen());
         document.getElementById('comms-nav-close-btn').addEventListener('click',   () => this._closeCommsNavScreen());
+        document.getElementById('ship-capacity-btn').addEventListener('click',       () => this._openShipCapacityScreen());
+        document.getElementById('ship-capacity-close-btn').addEventListener('click', () => this._closeShipCapacityScreen());
+        document.getElementById('tour-btn').addEventListener('click',                () => { this.tour.setTipsEnabled(true); this.tour.start(); });
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
         document.getElementById('save-btn').addEventListener('click',      () => this.saveGame());
@@ -138,10 +168,14 @@ class StarshipGame {
         document.getElementById('o2-toggle').addEventListener('click',    () => this.toggleSystem('o2'));
         document.getElementById('co2-toggle').addEventListener('click',   () => this.toggleSystem('co2'));
         document.getElementById('power-toggle').addEventListener('click', () => this.toggleSystem('power'));
+        document.getElementById('transceiver-toggle').addEventListener('click', () => this.toggleSystem('transceiver'));
+        document.getElementById('watermaker-toggle').addEventListener('click',  () => this.toggleSystem('waterMaker'));
 
         document.getElementById('o2-repair-btn').addEventListener('click',    () => this.startRepair('o2'));
         document.getElementById('co2-repair-btn').addEventListener('click',   () => this.startRepair('co2'));
         document.getElementById('power-repair-btn').addEventListener('click', () => this.startRepair('power'));
+        document.getElementById('transceiver-repair-btn').addEventListener('click', () => this.startRepair('transceiver'));
+        document.getElementById('watermaker-repair-btn').addEventListener('click',  () => this.startRepair('waterMaker'));
 
         document.getElementById('repair-queue-btn').addEventListener('click',     () => this.toggleTaskQueueScreen());
         document.getElementById('task-queue-close-btn').addEventListener('click', () => this.toggleTaskQueueScreen());
@@ -311,6 +345,7 @@ class StarshipGame {
         this.ventsOpen              = false;
         this.systems                = this._defaultSystems();
         this.repairQueue            = [];
+        this._selectedCommsId       = null;
         this.crewManager.resetRoster();
         this.crew                   = this.crewManager.aliveCount();
         this.commsNav.generate(this._pendingSeed); // chosen on the seed screen before the intro
@@ -326,6 +361,7 @@ class StarshipGame {
         this._startAutosaveTimer();
         this.updateDisplay();
         this.saveGame(); // persist the freshly-created slot immediately
+        this.tour.maybeAutoStart(); // first-time players only — see Tour
     }
 
     // ── Load screen ─────────────────────────────────────────────────────────
@@ -457,7 +493,7 @@ class StarshipGame {
 
     toggleSystem(name) {
         if (!this.gameActive || this.gamePaused) return;
-        if (this.systems[name].destroyed) return;
+        if (this.systems[name].destroyed || this.systems[name].installed === false) return;
         this.systems[name].active = !this.systems[name].active;
         this.updateDisplay();
     }
@@ -526,7 +562,9 @@ class StarshipGame {
         const black = this.systems.blackWater;
         if (black.current <= 0) return;
 
-        const input = prompt('Dump what percentage of the black water tank? (0-100)', '50');
+        const fine  = this.BLACK_WATER_DUMP_FINE;
+        const input = prompt(
+            `Dump what percentage of the black water tank? (0-100)\n\nDumping waste is illegal. Every dump is detected and fined ${fine} credits.`, '50');
         if (input === null) return;
         const pct = parseFloat(input);
         if (!isFinite(pct) || pct <= 0) return;
@@ -536,6 +574,20 @@ class StarshipGame {
         black.solidL  *= (1 - fraction);
         black.current  = black.liquidL + black.solidL;
         black.level    = (black.current / black.capacity) * 100;
+        if (black.level < this.systemUpdate.BLACK_WATER_FULL_PCT) black.exposureHours = 0;
+
+        // The fine is charged per dump regardless of size, and can put the account into debt.
+        this.credits -= fine;
+        this._showSaveStatus(`Fined ${fine} credits for dumping waste`, true);
+        this.updateDisplay();
+    }
+
+    // Buy a market listing (rules live in CommsNav.purchaseBlocker/purchase).
+    buyMarketItem(listingId) {
+        if (!this.gameActive || this.gamePaused) return;
+        const listing = (this.market || []).find(l => l.id === listingId);
+        if (!listing || !this.commsNav.purchase(listingId)) return;
+        this._showSaveStatus(`Bought ${listing.name} for ${listing.price} credits`);
         this.updateDisplay();
     }
 
@@ -598,6 +650,7 @@ class StarshipGame {
             this.gameTime += this.gameSpeed;
             this.systemUpdate.update(this.gameSpeed);
             this.updateDisplay();
+            this.tour.checkTips();
         }, 1000);
     }
 
@@ -636,8 +689,37 @@ class StarshipGame {
         this._displayFuel();
         this._displayFreshWater();
         this._displayBlackWater();
+        this._displayTransceiver();
+        this._displayWaterMaker();
+        this._displayShipCapacity();
         this._displayEnvironment();
+        this._displayLocation();
         this._displayRepairQueue();
+        // Contacts and market access follow the transceiver's live range.
+        if (this.commsNavScreen.style.display === 'flex') this._renderCommsNavScreen();
+    }
+
+    // Suffix for a powered device's ON/OFF line when the ship can't supply it.
+    _powerNote(sys) {
+        if (!sys.active) return '';
+        const fraction = this.systems.power.powerFraction ?? 1;
+        if (fraction <= 0) return ' &mdash; <span class="no-power">NO POWER</span>';
+        if (fraction < 1)  return ` &mdash; <span class="no-power">LOW POWER ${Math.round(fraction * 100)}%</span>`;
+        return '';
+    }
+
+    // Header readout of where the ship currently is and what kind of place that is.
+    _displayLocation() {
+        const nameEl = document.getElementById('location-name');
+        const typeEl = document.getElementById('location-type');
+        if (!nameEl || !typeEl) return;
+
+        const home = this.commsNav.home();
+        if (!home) { nameEl.textContent = '—'; typeEl.textContent = ''; return; }
+
+        nameEl.textContent = home.name;
+        typeEl.textContent = this.commsNav.locationTypeLabel(home) +
+            (this.inBreathableAtmosphere ? ' · Breathable atmosphere' : '');
     }
 
     _displayO2() {
@@ -666,7 +748,7 @@ class StarshipGame {
 
         this._setBadge('o2-status-badge', sys.status);
         document.getElementById('o2-status').innerHTML =
-            'Generator: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>';
+            'Generator: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>' + this._powerNote(sys);
         const btn = document.getElementById('o2-toggle');
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
@@ -703,7 +785,7 @@ class StarshipGame {
 
         this._setBadge('co2-status-badge', sys.status);
         document.getElementById('co2-status').innerHTML =
-            'Scrubber: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>';
+            'Scrubber: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>' + this._powerNote(sys);
         const btn = document.getElementById('co2-toggle');
         btn.textContent = sys.active ? 'Disable Scrubber' : 'Enable Scrubber';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
@@ -725,6 +807,19 @@ class StarshipGame {
 
         document.getElementById('power-o2-draw').textContent  = sys.o2DrawW  > 0 ? '−' + sys.o2DrawW.toFixed(2)  + ' W' : '0.00 W';
         document.getElementById('power-co2-draw').textContent = sys.co2DrawW > 0 ? '−' + sys.co2DrawW.toFixed(2) + ' W' : '0.00 W';
+        const otherDrawW = sys.otherDrawW ?? 0;
+        document.getElementById('power-other-draw').textContent = otherDrawW > 0 ? '−' + otherDrawW.toFixed(2) + ' W' : '0.00 W';
+
+        // Shown only while something switched on isn't getting the power it needs.
+        const shortRow = document.getElementById('power-shortfall-row');
+        const fraction = sys.powerFraction ?? 1;
+        if (fraction < 1 && (sys.demandW ?? 0) > 0) {
+            shortRow.style.display = '';
+            document.getElementById('power-shortfall').textContent =
+                fraction <= 0 ? 'NO POWER — systems offline' : `Brownout — systems at ${Math.round(fraction * 100)}%`;
+        } else {
+            shortRow.style.display = 'none';
+        }
 
         const netEl = document.getElementById('power-rate');
         netEl.textContent = (sys.netWhr >= 0 ? '+' : '') + sys.netWhr.toFixed(0) + ' Wh/hr';
@@ -768,12 +863,24 @@ class StarshipGame {
         document.getElementById('freshwater-indicator').style.left = Math.min(100, sys.level).toFixed(1) + '%';
         document.getElementById('freshwater-rate').textContent     = '−' + sys.consumeRateLhr.toFixed(3) + ' L/hr';
 
+        const maker     = this.systems.waterMaker;
+        const makerLhr  = maker.installed ? (maker.outputLhr ?? 0) : 0;
+        const makerRow  = document.getElementById('freshwater-maker-row');
+        makerRow.style.display = maker.installed ? '' : 'none';
+        document.getElementById('freshwater-maker').textContent = '+' + makerLhr.toFixed(3) + ' L/hr';
+        document.getElementById('freshwater-info').textContent = maker.installed
+            ? 'Topped up by the water maker'
+            : 'No water maker fitted — buy one from the local market';
+
+        const netDrainLhr = sys.consumeRateLhr - makerLhr;
         const rtEl = document.getElementById('freshwater-runtime');
-        if (sys.current <= 0) {
+        if (sys.current <= 0 && netDrainLhr > 0) {
             rtEl.textContent = 'EMPTY';
-        } else if (sys.consumeRateLhr > 0) {
-            const hrs = sys.current / sys.consumeRateLhr;
+        } else if (netDrainLhr > 0) {
+            const hrs = sys.current / netDrainLhr;
             rtEl.textContent = hrs >= 240 ? Math.round(hrs / 24) + ' days' : Math.round(hrs) + ' hrs';
+        } else if (makerLhr > 0) {
+            rtEl.textContent = 'Not draining';
         } else {
             rtEl.textContent = '—';
         }
@@ -826,7 +933,201 @@ class StarshipGame {
             'Tank: <strong>' + Math.round(sys.level) + '%</strong> full';
         const dumpBtn = document.getElementById('blackwater-dump-btn');
         dumpBtn.disabled = sys.current <= 0;
+        document.getElementById('blackwater-fine').textContent = this.BLACK_WATER_DUMP_FINE;
+
+        const exposureRow = document.getElementById('blackwater-exposure-row');
+        if ((sys.exposureHours ?? 0) > 0) {
+            exposureRow.style.display = '';
+            document.getElementById('blackwater-exposure').textContent =
+                'Overflowing for ' + this._fmtHrs(sys.exposureHours) + ' — crew exposed';
+        } else {
+            exposureRow.style.display = 'none';
+        }
         document.getElementById('card-blackwater').className = 'system-card' + this._cardMod(sys.status);
+    }
+
+    _displayTransceiver() {
+        const sys = this.systems.transceiver;
+        if (!document.getElementById('card-transceiver')) return; // markup not present yet
+
+        const range = sys.rangeLy ?? 0;
+        const rated = sys.ratedRangeLy ?? 2;
+        document.getElementById('transceiver-level').textContent    = range.toFixed(2) + ' ly';
+        document.getElementById('transceiver-indicator').style.left = Math.min(100, rated > 0 ? (range / rated) * 100 : 0).toFixed(1) + '%';
+        document.getElementById('transceiver-transmit').textContent =
+            (sys.transmitW ?? 0).toFixed(2) + ' W of ' + (sys.ratedTransmitW ?? 2).toFixed(2) + ' W';
+        document.getElementById('transceiver-draw').textContent     = (sys.drawW ?? 0) > 0 ? '−' + sys.drawW.toFixed(2) + ' W' : '0.00 W';
+
+        const localEl = document.getElementById('transceiver-local');
+        const local   = this.commsNav.hasLocalDetails();
+        localEl.textContent = local ? 'IN RANGE' : `Out of range (needs ${this.commsNav.LOCAL_DETAILS_RANGE_LY} ly)`;
+        localEl.className   = 'rate-value ' + (local ? 'rate-pos-good' : 'rate-neg');
+        document.getElementById('transceiver-contacts').textContent =
+            Math.max(0, this.commsNav.visibleLocations().length - 1); // not counting where you already are
+
+        this._setBadge('transceiver-status-badge', sys.status);
+        document.getElementById('transceiver-status').innerHTML =
+            'Transceiver: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>' + this._powerNote(sys);
+        const btn = document.getElementById('transceiver-toggle');
+        btn.textContent = sys.active ? 'Disable Transceiver' : 'Enable Transceiver';
+        btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
+        btn.disabled    = !!sys.destroyed;
+        document.getElementById('card-transceiver').className = 'system-card' + this._cardMod(sys.status);
+
+        this._displayRepairPanel('transceiver', 'transceiver');
+    }
+
+    _displayWaterMaker() {
+        const sys = this.systems.waterMaker;
+        if (!document.getElementById('card-watermaker')) return; // markup not present yet
+
+        const installed = sys.installed !== false;
+        document.getElementById('watermaker-fitted').style.display  = installed ? '' : 'none';
+        document.getElementById('watermaker-missing').style.display = installed ? 'none' : '';
+        document.getElementById('watermaker-level').textContent = installed ? (sys.outputLhr ?? 0).toFixed(2) + ' L/hr' : '—';
+        document.getElementById('watermaker-level-label').textContent = installed ? 'output' : 'not fitted';
+
+        const badge = document.getElementById('watermaker-status-badge');
+        if (installed) {
+            this._setBadge('watermaker-status-badge', sys.status);
+        } else {
+            badge.textContent = 'NOT FITTED';
+            badge.className   = 'status-badge badge-warning';
+        }
+        document.getElementById('card-watermaker').className =
+            'system-card' + (installed ? this._cardMod(sys.status) : ' card-unfitted');
+        if (!installed) return;
+
+        const sourceLabel = {
+            blackWater: 'Reclaiming black water', atmosphere: 'Condensing from outside air',
+            full: 'Fresh tank full', none: sys.active ? 'Nothing to process' : '—',
+        }[sys.source ?? 'none'];
+        document.getElementById('watermaker-rated').textContent  = (sys.ratedLhr ?? 0).toFixed(2) + ' L/hr';
+        document.getElementById('watermaker-source').textContent = sourceLabel;
+        document.getElementById('watermaker-draw').textContent   = (sys.drawW ?? 0) > 0 ? '−' + sys.drawW.toFixed(2) + ' W' : '0.00 W';
+
+        document.getElementById('watermaker-status').innerHTML =
+            'Water maker: <strong>' + (sys.active ? 'ON' : 'OFF') + '</strong>' + this._powerNote(sys);
+        const btn = document.getElementById('watermaker-toggle');
+        btn.textContent = sys.active ? 'Disable Water Maker' : 'Enable Water Maker';
+        btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
+        btn.disabled    = !!sys.destroyed;
+
+        this._displayRepairPanel('waterMaker', 'watermaker');
+    }
+
+    // ── Ship capacity (mass / volume) ──────────────────────────────────────
+    // Purely informational for now — a planning panel ahead of a future
+    // purchase mechanic, decoupled from the atmosphere physics (which still
+    // uses its own fixed cabin volume in system_update.js).
+
+    // Fixed mass/volume for hardware that isn't tiered via module_specs.json
+    // (battery has no count of its own, tanks aren't tiered at all). Contents
+    // density approximates how much heavier a tank gets as it fills.
+    _tankSpecs() {
+        return {
+            fuel:       { label: 'Fuel Tank',        massKg: 9,  volumeM3: 0.15, contentDensityKgPerL: 0.8 },
+            freshWater: { label: 'Fresh Water Tank', massKg: 32, volumeM3: 0.62, contentDensityKgPerL: 1.0 },
+            blackWater: { label: 'Black Water Tank',  massKg: 11, volumeM3: 0.15, contentDensityKgPerL: 1.0 },
+        };
+    }
+
+    _batterySpec() {
+        return { label: 'Battery', massKg: 28, volumeM3: 0.25 };
+    }
+
+    // Mirrors SystemUpdate._moduleField — duplicated rather than reached into,
+    // since that one's underscore-prefixed as internal to that class.
+    _moduleField(moduleType, tier, field, fallback) {
+        const modules = this.moduleSpecs && this.moduleSpecs.modules;
+        const spec = modules && modules[moduleType] && modules[moduleType][String(tier)];
+        return spec && spec[field] != null ? spec[field] : fallback;
+    }
+
+    _computeShipCapacity() {
+        const unladenMassKg = this.shipClass?.specs?.massKg ?? 0;
+        const maxMassKg     = unladenMassKg + (this.shipClass?.specs?.cargoCapacityKg ?? 0);
+        const totalVolumeM3 = this.shipClass?.defaultSystems?.volumeM3 ?? 0;
+
+        const items = [];
+
+        [['o2', 'o2Generator', 'O₂ Generator'], ['co2', 'co2Scrubber', 'CO₂ Scrubber'], ['power', 'generator', 'Power Generator'],
+         ['transceiver', 'transceiver', 'Transceiver'], ['waterMaker', 'waterMaker', 'Water Maker']]
+            .filter(([sysKey]) => this.systems[sysKey].installed !== false)
+            .forEach(([sysKey, moduleType, label]) => {
+                const sys      = this.systems[sysKey];
+                const massEach = this._moduleField(moduleType, sys.tier, 'massKg', 0);
+                const volEach  = this._moduleField(moduleType, sys.tier, 'volumeM3', 0);
+                items.push({ label, count: sys.count, massKg: massEach * sys.count, volumeM3: volEach * sys.count });
+            });
+
+        const battery = this._batterySpec();
+        items.push({ label: battery.label, count: 1, massKg: battery.massKg, volumeM3: battery.volumeM3 });
+
+        const tankSpecs = this._tankSpecs();
+        [['fuel', tankSpecs.fuel], ['freshWater', tankSpecs.freshWater], ['blackWater', tankSpecs.blackWater]]
+            .forEach(([sysKey, spec]) => {
+                const sys = this.systems[sysKey];
+                items.push({
+                    label: spec.label, count: 1,
+                    massKg: spec.massKg + sys.current * spec.contentDensityKgPerL,
+                    volumeM3: spec.volumeM3,
+                });
+            });
+
+        const modulesMassKg   = items.reduce((sum, i) => sum + i.massKg, 0);
+        const modulesVolumeM3 = items.reduce((sum, i) => sum + i.volumeM3, 0);
+        const totalMassKg     = unladenMassKg + modulesMassKg;
+
+        return {
+            unladenMassKg, maxMassKg, totalMassKg,
+            freeMassKg: maxMassKg - totalMassKg,
+            totalVolumeM3, usedVolumeM3: modulesVolumeM3,
+            freeVolumeM3: totalVolumeM3 - modulesVolumeM3,
+            items,
+        };
+    }
+
+    _displayShipCapacity() {
+        if (!document.getElementById('capacity-breakdown')) return; // markup not present yet
+
+        const imgEl   = document.getElementById('capacity-ship-img');
+        const nameEl  = document.getElementById('capacity-ship-name');
+        const classEl = document.getElementById('capacity-ship-class');
+        if (imgEl && this.shipClass?.image) imgEl.src = this.shipClass.image;
+        if (nameEl)  nameEl.textContent  = this.shipName;
+        if (classEl) classEl.textContent = this.shipClass ? this.shipClass.name : 'Vagrant Mk.I';
+
+        const cap = this._computeShipCapacity();
+
+        const massPct = cap.maxMassKg > 0 ? (cap.totalMassKg / cap.maxMassKg) * 100 : 0;
+        document.getElementById('capacity-mass-level').textContent    = Math.round(cap.totalMassKg) + ' kg';
+        document.getElementById('capacity-mass-max').textContent      = Math.round(cap.maxMassKg);
+        document.getElementById('capacity-mass-indicator').style.left = Math.min(100, massPct).toFixed(1) + '%';
+        document.getElementById('capacity-mass-free').textContent     = Math.round(cap.freeMassKg) + ' kg';
+
+        const volPct = cap.totalVolumeM3 > 0 ? (cap.usedVolumeM3 / cap.totalVolumeM3) * 100 : 0;
+        document.getElementById('capacity-volume-level').textContent    = cap.usedVolumeM3.toFixed(2) + ' m³';
+        document.getElementById('capacity-volume-max').textContent      = cap.totalVolumeM3;
+        document.getElementById('capacity-volume-indicator').style.left = Math.min(100, volPct).toFixed(1) + '%';
+        document.getElementById('capacity-volume-free').textContent     = cap.freeVolumeM3.toFixed(2) + ' m³';
+
+        const rows = [
+            `<li class="task-card task-card-static">
+                <div class="task-info">
+                    <div class="task-title">Hull (unladen)</div>
+                    <div class="task-meta">${Math.round(cap.unladenMassKg)} kg</div>
+                </div>
+            </li>`,
+            ...cap.items.map(item => `
+                <li class="task-card task-card-static">
+                    <div class="task-info">
+                        <div class="task-title">${item.label}${item.count > 1 ? ` &times;${item.count}` : ''}</div>
+                        <div class="task-meta">${item.massKg.toFixed(1)} kg &middot; ${item.volumeM3.toFixed(2)} m&#179;</div>
+                    </div>
+                </li>`),
+        ];
+        document.getElementById('capacity-breakdown').innerHTML = rows.join('');
     }
 
     _displayEnvironment() {
@@ -856,9 +1157,36 @@ class StarshipGame {
         this.crewStatElement.className = 'stat stat-clickable' +
             (worst === 'normal' ? '' : (worst === 'warning' ? ' stat-warning' : ' stat-critical'));
 
+        this._displayCrewIdleNote();
+
         if (this.crewScreen.style.display === 'flex' && !this._editingCrewId) {
             this._renderCrewScreen();
         }
+    }
+
+    // Speech bubble under the Crew counter: someone on a long roster is on
+    // shift with nothing to do, and says so. Purely informational — the
+    // schedule is still the player's call. Dismissing it hides it until the
+    // situation has cleared and come back.
+    _displayCrewIdleNote() {
+        const noteEl = document.getElementById('crew-idle-note');
+        if (!noteEl) return;
+
+        const idle = this.gameActive ? this.crewManager.idleOverScheduled() : [];
+        if (!idle.length) {
+            this._crewIdleNoteDismissed = false;
+            noteEl.style.display = 'none';
+            return;
+        }
+        if (this._crewIdleNoteDismissed) { noteEl.style.display = 'none'; return; }
+
+        const member = idle[0];
+        const number = this.crewManifest.indexOf(member) + 1;
+        const hours  = +this.crewManager.dutyHours(member).toFixed(1);
+        const others = idle.length > 1 ? ` (and ${idle.length - 1} more)` : '';
+        document.getElementById('crew-idle-text').textContent =
+            `Crew ${number}${others}: “I'm rostered ${hours} hours a day and there's nothing for me to do.”`;
+        noteEl.style.display = '';
     }
 
     _openCrewScreen() {
@@ -937,6 +1265,7 @@ class StarshipGame {
             const status     = this.crewManager.statusFor(member);
             const editing    = this._editingCrewId === member.id;
             const shiftsText = member.shifts.map(s => `${this._fmtHour(s.startHour)}&ndash;${this._fmtHour(s.endHour)}`).join(', ') || 'No shifts';
+            const duty       = this.crewManager.dutySummary(member);
 
             return `
                 <li class="crew-card" data-crew-id="${member.id}">
@@ -945,6 +1274,7 @@ class StarshipGame {
                         <div class="task-progress-track crew-health-track"><div class="task-progress-fill ${this._healthBarClass(status)}" style="width:${Math.max(0, member.health)}%"></div></div>
                         <div class="task-meta">${member.health.toFixed(0)}% health</div>
                         ${editing ? this._renderShiftEditor(member) : `<div class="task-meta">Shifts: ${shiftsText}</div>`}
+                        ${member.dead ? '' : `<div class="task-meta crew-duty crew-duty-${duty.level}">${duty.text}</div>`}
                     </div>
                     ${editing ? '' : `<button class="crew-edit-btn" data-crew-id="${member.id}" ${member.dead ? 'disabled' : ''}>Edit Shifts</button>`}
                 </li>`;
@@ -1018,16 +1348,25 @@ class StarshipGame {
     // ── Comms & Nav UI ─────────────────────────────────────────────────────
 
     _openCommsNavScreen() {
-        if (!this._selectedCommsId) {
-            const home = this.commsNav.home();
-            if (home) this._selectedCommsId = home.id;
-        }
         this.commsNavScreen.style.display = 'flex';
         this._renderCommsNavScreen();
     }
 
     _closeCommsNavScreen() {
         this.commsNavScreen.style.display = 'none';
+    }
+
+    // ── Ship Capacity modal ─────────────────────────────────────────────────
+    // Launched from the dashboard rather than an inline card since this will
+    // grow into the buy/sell/adjust-components screen.
+
+    _openShipCapacityScreen() {
+        this.shipCapacityScreen.style.display = 'flex';
+        this._displayShipCapacity();
+    }
+
+    _closeShipCapacityScreen() {
+        this.shipCapacityScreen.style.display = 'none';
     }
 
     _selectCommsLocation(id) {
@@ -1048,6 +1387,20 @@ class StarshipGame {
         const seedEl = document.getElementById('comms-seed-label');
         if (seedEl) seedEl.textContent = this.commsSeed != null ? `— Sector Seed: ${this.commsSeed}` : '';
 
+        // Only what the transceiver can reach right now is shown; a selection
+        // that has dropped out of range falls back to where the ship is.
+        const visible = this.commsNav.visibleLocations();
+        if (!visible.some(l => l.id === this._selectedCommsId)) {
+            this._selectedCommsId = this.commsNav.home()?.id ?? null;
+        }
+
+        const rangeEl = document.getElementById('comms-range-status');
+        if (rangeEl) {
+            const sys   = this.systems.transceiver;
+            const state = sys.destroyed ? 'destroyed' : !sys.active ? 'switched off' : `range ${this.commsNav.rangeLy().toFixed(2)} ly`;
+            rangeEl.textContent = `Transceiver ${state} — ${Math.max(0, visible.length - 1)} contact(s) in range`;
+        }
+
         this._renderCommsLocationList();
 
         const planeEl = document.getElementById('comms-plane-views');
@@ -1064,7 +1417,7 @@ class StarshipGame {
     _renderCommsLocationList() {
         const listEl = document.getElementById('comms-location-list');
         if (!listEl) return;
-        const locations = this.commsLocations || [];
+        const locations = this.commsNav.visibleLocations();
 
         if (!locations.length) {
             listEl.innerHTML = '<li class="task-empty">No charted locations.</li>';
@@ -1090,7 +1443,7 @@ class StarshipGame {
     _renderCommsDetailsPane() {
         const paneEl = document.getElementById('comms-details-pane');
         if (!paneEl) return;
-        const loc = (this.commsLocations || []).find(l => l.id === this._selectedCommsId);
+        const loc = this.commsNav.visibleLocations().find(l => l.id === this._selectedCommsId);
 
         if (!loc) {
             paneEl.innerHTML = '<p class="task-empty">Select a location to view details.</p>';
@@ -1103,12 +1456,48 @@ class StarshipGame {
 
         paneEl.innerHTML = `
             <h3 class="comms-details-title">${loc.name}</h3>
-            <div class="comms-details-kind">${this._commsKindLabel(loc.kind)}</div>
+            <div class="comms-details-kind">${this._commsKindLabel(loc.kind)} &middot; ${this.commsNav.locationTypeLabel(loc)}</div>
             <div class="comms-details-coords">XYZ: ${loc.x.toFixed(2)}, ${loc.y.toFixed(2)}, ${loc.z.toFixed(2)}</div>
             <div class="comms-details-distance">${distanceLine}</div>
-            <div class="comms-details-placeholder">
-                <p class="task-empty">Trade and news services coming soon.</p>
-            </div>`;
+            <div class="comms-details-services">${this._commsServicesHtml(loc)}</div>`;
+
+        paneEl.querySelectorAll('.market-buy-btn').forEach(btn =>
+            btn.addEventListener('click', () => this.buyMarketItem(btn.dataset.listingId))
+        );
+    }
+
+    // Trade & news for one location. Local services need the local network in
+    // range; anywhere else is view-only until remote trade and delivery exist.
+    _commsServicesHtml(loc) {
+        if (loc.kind !== 'home') {
+            return '<p class="task-empty">No trade link. For now you can only buy in person, on a planet.</p>';
+        }
+        if (!this.commsNav.hasLocalDetails()) {
+            return `<p class="task-empty">Local network out of range. Transceiver range is ${this.commsNav.rangeLy().toFixed(2)} ly;
+                    the local market and news need ${this.commsNav.LOCAL_DETAILS_RANGE_LY} ly. Repair the transceiver and switch it on.</p>`;
+        }
+
+        const listings = this.commsNav.listingsAt(loc);
+        const rows = listings.map(l => {
+            const blocker = this.commsNav.purchaseBlocker(l);
+            const gamble  = l.repairPct < 20 ? ' &middot; <span class="market-risk">repair is a gamble</span>' : '';
+            return `
+                <li class="market-card" data-listing-id="${l.id}">
+                    <div class="market-info">
+                        <div class="market-name">${this._escapeHtml(l.name)}</div>
+                        <div class="market-meta">Condition ${Math.round(l.repairPct)}%${gamble}</div>
+                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn market-buy-btn" data-listing-id="${l.id}" ${blocker ? 'disabled' : ''}>Buy &middot; ${l.price} cr</button>
+                </li>`;
+        }).join('');
+
+        return `
+            <h4 class="comms-services-title">Items for Sale</h4>
+            <p class="market-credits">Your credits: <strong>${this.credits}</strong></p>
+            <ul class="market-list">${rows || '<li class="task-empty">Nothing for sale right now.</li>'}</ul>
+            <h4 class="comms-services-title">News</h4>
+            <p class="task-empty">No bulletins.</p>`;
     }
 
     // Two orthographic plane views stand in for a full 3D render — axis1/axis2
@@ -1120,7 +1509,7 @@ class StarshipGame {
             gridLines.push(`<line x1="0" y1="${i}" x2="10" y2="${i}" class="comms-grid-line" />`);
         }
 
-        const markers = (this.commsLocations || []).map(loc => {
+        const markers = this.commsNav.visibleLocations().map(loc => {
             const cx = loc[axis1];
             const cy = 10 - loc[axis2]; // flip so larger values read "up"
             const selected = loc.id === this._selectedCommsId;
@@ -1186,7 +1575,10 @@ class StarshipGame {
     }
 
     _repairSystemLabel(systemKey) {
-        return { o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator' }[systemKey] ?? systemKey;
+        return {
+            o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator',
+            transceiver: 'Transceiver', waterMaker: 'Water Maker',
+        }[systemKey] ?? systemKey;
     }
 
     // Repairable systems not yet in the queue — the same set each system's own
@@ -1196,7 +1588,7 @@ class StarshipGame {
         const listEl = document.getElementById('repair-available-list');
         if (!listEl) return;
 
-        const rows = ['o2', 'co2', 'power']
+        const rows = this.repairManager.repairableKeys()
             .filter(key => this.repairManager.canRepair(key))
             .map(key => {
                 const info = this.repairManager.describeRepair(key);

@@ -2,11 +2,12 @@
 // roster (current location + trading post + comms signal), the list/selection
 // UI, distance display, and persistence across save/reload.
 const { expect } = require('@playwright/test');
-const { test, startNewGame } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline } = require('./helpers.js');
 
 test.describe('comms & nav', () => {
     test('opens with Kel Veth III marked current and two other charted entries', async ({ page }) => {
         await startNewGame(page);
+        await bringCommsOnline(page);
         await page.click('#comms-nav-btn');
         await page.waitForSelector('#comms-nav-screen', { state: 'visible' });
 
@@ -21,6 +22,7 @@ test.describe('comms & nav', () => {
 
     test('selecting the trading post or signal shows a positive distance; Kel Veth shows "You are here"', async ({ page }) => {
         await startNewGame(page);
+        await bringCommsOnline(page);
         await page.click('#comms-nav-btn');
         await page.waitForSelector('#comms-nav-screen', { state: 'visible' });
 
@@ -40,6 +42,7 @@ test.describe('comms & nav', () => {
 
     test('clicking a marker in the plane view selects the same location as the list', async ({ page }) => {
         await startNewGame(page);
+        await bringCommsOnline(page);
         await page.click('#comms-nav-btn');
         await page.waitForSelector('#comms-nav-screen', { state: 'visible' });
 
