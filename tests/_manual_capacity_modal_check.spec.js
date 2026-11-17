@@ -32,8 +32,7 @@ test.describe('manual ship capacity modal verification', () => {
 
         // Close it.
         await page.click('#ship-capacity-close-btn');
-        const isHidden = await page.evaluate(() => document.getElementById('ship-capacity-screen').style.display === 'none');
-        expect(isHidden).toBe(true);
+        await expect(page.locator('#ship-capacity-screen')).toBeHidden(); // after its short close fade
 
         console.log('CONSOLE ERRORS:', JSON.stringify(consoleErrors));
         expect(consoleErrors).toEqual([]);

@@ -170,8 +170,8 @@ class SoundManager {
         this._renderPanel();
     }
 
-    openPanel()  { this.screenEl.style.display = 'flex'; this._renderPanel(); }
-    closePanel() { this.screenEl.style.display = 'none'; }
+    openPanel()  { Overlay.show(this.screenEl); this._renderPanel(); }
+    closePanel() { Overlay.hide(this.screenEl); }
 
     _renderPanel() {
         if (!this.toggleEl || !this.screenEl) return;

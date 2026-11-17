@@ -52,7 +52,7 @@ class Tour {
     //   hint? (what to click), done? (game => bool — auto-advances when true),
     //   enter? (game => void — runs once when the step is shown) }
     _buildSteps() {
-        const isOpen = el => el.style.display === 'flex';
+        const isOpen = el => Overlay.isOpen(el);
         const openQueue = g => { if (!isOpen(g.taskQueueScreen)) g.toggleTaskQueueScreen(); };
         const closeQueue = g => { if (isOpen(g.taskQueueScreen)) g.toggleTaskQueueScreen(); };
         const closeCrew  = g => { if (isOpen(g.crewScreen)) g._closeCrewScreen(); };
