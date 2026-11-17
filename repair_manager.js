@@ -24,6 +24,8 @@
 // linearly, so wear still degrades it smoothly.
 
 class RepairManager {
+    static _taskSeq = 0; // makes task ids unique within a page session
+
     constructor(game) {
         this.game = game;
 
@@ -214,7 +216,8 @@ class RepairManager {
         const stage = this.stageFor(systemKey, sys.repairPct ?? 100);
         const hours = this._stageHoursFrom(stage, sys.repairPct ?? 100);
         const task = {
-            id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            // Unique id without a roll, so queueing a task doesn't use up a gameplay roll.
+            id: `task-${Date.now().toString(36)}-${++RepairManager._taskSeq}`,
             systemKey,
             targetPct: target.targetPct,
             band: stage.name,          // the stage currently being worked
@@ -302,7 +305,7 @@ class RepairManager {
         const sys   = this._sys(task.systemKey);
         const stage = this._taskStage(task);
 
-        if (stage.destroyChance && Math.random() < stage.destroyChance) {
+        if (stage.destroyChance && this.game.rng.next() < stage.destroyChance) {
             sys.destroyed = true;
             sys.active = false;
             sys.repairPct = 0;

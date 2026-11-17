@@ -164,12 +164,11 @@ test.describe('module repair state', () => {
             g._stopTimer();
             g.gameTime = 9.5 * 3600;
             g.systems.power.repairPct = 5;
-            const original = Math.random;
-            Math.random = () => 0.999; // avoid the 20% destroy roll
+            g.rng.next = () => 0.999; // avoid the 20% destroy roll
             g.startRepair('power');
             g.repairQueue[0].hoursRemaining = 0.0001;
             g.repairManager.processQueue(1);
-            Math.random = original;
+            delete g.rng.next; // back to the real seeded roll
             const salvaged = { pct: g.systems.power.repairPct, jury: g.systems.power.juryRigged,
                                destroyed: g.systems.power.destroyed, band: g.repairQueue[0].band };
 
@@ -204,12 +203,11 @@ test.describe('module repair state', () => {
         await page.evaluate(() => {
             window.game.gameTime = 9.5 * 3600;
             window.game.systems.co2.repairPct = 5;
-            const original = Math.random;
-            Math.random = () => 0; // force the 20% destroy roll
+            window.game.rng.next = () => 0; // force the 20% destroy roll
             window.game.startRepair('co2');
             window.game.repairQueue.find(t => t.systemKey === 'co2').hoursRemaining = 0.0001;
             window.game.repairManager.processQueue(1);
-            Math.random = original;
+            delete window.game.rng.next;
             window.game.updateDisplay();
         });
         const co2 = await page.evaluate(() => window.game.systems.co2);

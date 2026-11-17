@@ -144,7 +144,7 @@ class CrewManager {
             classes: tpl.classes,
             shifts: tpl.shifts.map(s => ({ ...s })),
             health: 100,
-            varianceFactor: 0.7 + Math.random() * 0.6,
+            varianceFactor: 0.7 + this.game.rng.next() * 0.6,
             dead: false,
         };
     }
@@ -173,7 +173,7 @@ class CrewManager {
                     id: tpl.id, classes: tpl.classes,
                     shifts: (saved.shifts ?? tpl.shifts).map(s => ({ ...s })),
                     health: saved.health ?? 100,
-                    varianceFactor: saved.varianceFactor ?? (0.7 + Math.random() * 0.6),
+                    varianceFactor: saved.varianceFactor ?? (0.7 + this.game.rng.next() * 0.6),
                     dead: saved.dead ?? false,
                 };
             }
@@ -277,7 +277,7 @@ class CrewManager {
                 health = Math.max(cap, health - this.fatigueRatePctPerHr(member) * member.varianceFactor * hours);
             }
 
-            if (infectionChance > 0 && Math.random() < infectionChance) {
+            if (infectionChance > 0 && this.game.rng.next() < infectionChance) {
                 health -= this.INFECTION_DAMAGE_PCT;
             }
 

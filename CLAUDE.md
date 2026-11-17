@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Run the app**: `node --no-warnings server.js` (or `npm start`) → http://localhost:3001. No build step — client is static files served as-is. The `--no-warnings` flag suppresses `node:sqlite`'s experimental-feature warning.
 - **Run tests**: `npm test` (runs `playwright test`, which auto-starts `node server.js` against an isolated `test-results/test-game.db` via `GAME_DB_PATH` — never the real `savegame/game.db`).
-- **Before running tests, check whether a server is already on port 3001** (`netstat -ano | findstr :3001`, or `Get-NetTCPConnection -LocalPort 3001` in PowerShell). `playwright.config.js` sets `reuseExistingServer: !process.env.CI`, so if the user is already running `node server.js` (e.g. manually testing the app before handing you a prompt), `npm test` silently reuses that process instead of starting a fresh one — including whatever DB schema it already loaded in memory at its own startup. Since SQLite migrations in `db.js` only run once per process, at startup, a stale long-running process can mask a real schema/migration bug as a flaky test failure (look for "no such column" in a save's error response). If a process is already listening, don't kill it without asking — it may be the user's own manual test session.
+- **Before running tests, check whether a server is already on port 3001** (`netstat -ano | findstr :3001`, or `Get-NetTCPConnection -LocalPort 3001` in PowerShell). `playwright.config.js` sets `reuseExistingServer: !process.env.CI`, so if the user is already running `node server.js` (e.g. manually testing the app before handing you a prompt), `npm test` silently reuses that process instead of starting a fresh one — including whatever DB schema it already loaded in memory at its own startup. Since SQLite migrations in `db.js` only run once per process, at startup, a stale long-running process can mask a real schema/migration bug as a flaky test failure (look for "no such column" in a save's error response). If a process is already listening, don't kill it without asking — it may be the user's own manual test session. Instead, run the suite on its own port: `TEST_PORT=3017 npx playwright test` (Bash) / `$env:TEST_PORT=3017; npx playwright test` (PowerShell). `server.js` honours `PORT`, and the config passes it through.
 - **Run a single test**: `npx playwright test -g "<test name substring>"` or `npx playwright test tests/<file>.spec.js`.
 - **No lint/typecheck configured.**
 
@@ -14,10 +14,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
-classic `<script>` tag in `index.html`, in this order: `game_state.js` → `system_update.js` →
-`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `main.js` → `sound.js`. That order is load-bearing —
+classic `<script>` tag in `index.html`, in this order: `rng.js` → `game_state.js` → `system_update.js` →
+`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
+
+**Rewind — read [docs/rewind-readiness.md](docs/rewind-readiness.md) before adding game state or
+randomness.** The player can go back to earlier checkpoints and branch from them (the Timeline,
+below), so every change must keep to its rules: (1) all game state goes through
+`GameState.snapshot`/`shipInstanceSnapshot`/`restore`; (2) `restore` keeps loading older payloads,
+with defaults for missing fields; (3) every gameplay roll uses `game.rng.next()` (the seeded
+`GameRng` in `rng.js`, whose state is saved), never `Math.random()`; (4) static reference JSON is
+deliberately not checkpointed.
 
 **No encapsulation between the client classes.** `StarshipGame` (`main.js`) holds all
 live state (`this.systems`, `this.repairQueue`, `this.moduleSpecs`, `this.crewManifest`) as
@@ -136,6 +144,18 @@ and a hand-rolled 3D projection wasn't worth the payoff for three points.
 `{id, when(game), target, title, body}`; `checkTips()` runs once per tick from `main.js` and shows
 the first due tip not yet seen for this save (`localStorage`, keyed by save id). Anything that only
 becomes relevant hours into a game belongs there, not in the linear tour.
+
+**The Timeline (`timeline.js`, `Timeline`) is rewind.** Each save has a *tree* of checkpoints in
+`save_checkpoints` (`db.js`): each row is a full `{world, shipInstances}` payload as JSON plus its
+`parent_id`, and `saves.head_checkpoint_id` is the one the live state grew from. Checkpoints are taken
+when the clock crosses a game hour (`maybeCheckpoint()`, every tick), at New Game (`start`) and on
+Save Game (`save`). `db.addCheckpoint` thins the current line as it goes: hourly checkpoints more than a
+game day old drop to one per day, but `start`, `save`, `branch-end` and branch points are always kept.
+Going back is one server transaction (`db.restoreCheckpoint`): the live state being left is stored as
+a `branch-end`, the checkpoint's payload becomes the live save, and the checkpoint becomes the head,
+so later play grows a new branch and no line is ever lost. Afterwards `game.afterRewind()` leaves the
+game paused on the pause menu (also reviving a GAME OVER). The screen, opened from the pause menu, draws
+the tree as inline SVG: one column per distinct checkpoint time, one row per branch.
 
 **The guided tour (`tour.js`, `Tour`)** auto-starts on a player's first New Game (a
 `localStorage` flag, `starshipOps.tourSeen`, records that it's been finished or skipped) and can be

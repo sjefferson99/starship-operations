@@ -6,17 +6,8 @@
 // RepairManager/CrewManager are — a self-contained domain the dashboard UI
 // reads from rather than owns.
 
-// mulberry32 — tiny, fast, deterministic PRNG. Same seed always produces the
-// same sequence, which is what makes "Sector Seed: 123456789" meaningful.
-function mulberry32(seed) {
-    let a = seed >>> 0;
-    return function () {
-        a |= 0; a = (a + 0x6D2B79F5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-}
+// mulberry32 (rng.js) drives sector generation, so the same seed always
+// produces the same sector.
 
 class CommsNav {
     constructor(game) {
@@ -71,8 +62,8 @@ class CommsNav {
             x: rng() * this.GRID_SIZE, y: rng() * this.GRID_SIZE, z: rng() * this.GRID_SIZE,
         };
 
-        const tradingPost = this._nearbyLocation(rng, 'location', this._pick(rng, this.TRADING_POST_NAMES), home);
-        const signal       = this._nearbyLocation(rng, 'signal',  this._pick(rng, this.SIGNAL_NAMES), home);
+        const tradingPost = this._nearbyLocation(rng, 'location', this._pick(rng, this.TRADING_POST_NAMES), home, finalSeed);
+        const signal       = this._nearbyLocation(rng, 'signal',  this._pick(rng, this.SIGNAL_NAMES), home, finalSeed);
 
         this.game.commsSeed      = finalSeed;
         this.game.commsLocations = [home, tradingPost, signal];
@@ -86,11 +77,13 @@ class CommsNav {
         return list[Math.floor(rng() * list.length)];
     }
 
-    _nearbyLocation(rng, kind, name, home) {
+    // The id comes from the seed, not a roll. Drawing from `rng` for it would
+    // shift every roll after it and move the sector a seed produces.
+    _nearbyLocation(rng, kind, name, home, seed) {
         const offset = () => (rng() * 2 - 1) * this.NEARBY_RANGE; // [-range, range]
         const clamp  = v => Math.max(0, Math.min(this.GRID_SIZE, v));
         return {
-            id: kind + '-' + Math.random().toString(36).slice(2, 8),
+            id: kind + '-' + (seed >>> 0).toString(36),
             kind, name,
             x: clamp(home.x + offset()),
             y: clamp(home.y + offset()),

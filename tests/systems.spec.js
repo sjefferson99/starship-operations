@@ -537,7 +537,7 @@ test.describe('black water', () => {
             const black = g.systems.blackWater;
             const me = g.crewManifest[0];
             me.varianceFactor = 1;
-            Math.random = () => 0.999; // no infection rolls — isolate the steady drain
+            g.rng.next = () => 0.999; // no infection rolls — isolate the steady drain
 
             black.liquidL = 100; black.solidL = 0;
             g.systemUpdate.update(60);
@@ -568,7 +568,7 @@ test.describe('black water', () => {
             g.systems.blackWater.exposureHours = 8;
             const late = g.crewManager.infectionChancePerHr();
 
-            Math.random = () => 0; // the roll always hits
+            g.rng.next = () => 0; // the roll always hits
             me.health = 100;
             g.crewManager.update(1);
             return { early, late, health: me.health };
