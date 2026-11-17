@@ -306,7 +306,8 @@ class RepairManager {
         // currently determines that task's progress speed.
         active.forEach((task, i) => {
             const factor = this.game.crewManager.effectivenessMultiplier(onShift[i].health) *
-                           this.game.crewManager.fatigueWorkFactor(onShift[i]);
+                           this.game.crewManager.fatigueWorkFactor(onShift[i]) *
+                           this.game.crewManager.hungerWorkFactor();
             let workHours = (dt / 3600) / factor;
 
             // One big tick can finish a stage and carry on into the next.

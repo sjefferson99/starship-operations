@@ -6,6 +6,7 @@ const { test, startNewGame } = require('./helpers.js');
 const db = require('../db.js');
 
 const HOUR = 3600;
+const DAY  = 24 * HOUR;
 
 function payloadAt(gameTime, credits = 1000) {
     return {
@@ -164,6 +165,39 @@ test.describe('Timeline', () => {
         await expect.poll(async () => (await listTree(page)).checkpoints.length).toBe(1);
         await page.evaluate(async () => { window.game._stopTimer(); window.game.gameTime = 1200; await window.game.saveGame(); });
         expect((await listTree(page)).checkpoints.map(c => c.kind)).toEqual(['start', 'save']);
+    });
+
+    test('a long game rolls up into weeks and days, and any checkpoint is a few clicks away', async ({ page }) => {
+        await startNewGame(page);
+        await expect.poll(async () => (await listTree(page)).checkpoints.length).toBe(1);
+        // 40 days, a checkpoint every 6 hours (older ones thin to one a day).
+        for (let t = 6 * HOUR; t <= 40 * DAY; t += 6 * HOUR) await playTo(page, t, `g.credits = ${t / HOUR};`);
+        await page.evaluate(() => { window.game.gameTime += 600; });
+
+        await page.keyboard.press('Escape');
+        await page.click('#timeline-btn');
+        const tree = page.locator('#timeline-tree');
+        // 40 days is under two months, so it opens on weeks: W1–W6, and no single checkpoints.
+        await expect(tree.locator('.timeline-bucket')).toHaveCount(6);
+        await expect(tree.locator('.timeline-node')).toHaveCount(0);
+        await expect(tree.locator('.timeline-day')).toHaveText(['W1', 'W2', 'W3', 'W4', 'W5', 'W6']);
+
+        // Week 1 → its 7 days → day 3's own checkpoint.
+        await tree.locator('[data-bucket-start="0"]').click();
+        await expect(tree.locator('.timeline-day')).toHaveText(['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7']);
+        await tree.locator(`[data-bucket-start="${2 * DAY}"]`).click();
+        await expect(page.locator('#timeline-crumbs')).toContainText('Week 1 (days 1–7)');
+        await expect(page.locator('#timeline-crumbs')).toContainText('Day 3');
+        await expect(tree.locator('.timeline-node')).toHaveCount(1);
+        await tree.locator('.timeline-node').click();
+        await expect(page.locator('#timeline-selected-title')).toContainText('Day 3');
+
+        // Back out to everything, then straight down to today, which shows "now".
+        await page.locator('#timeline-crumbs [data-crumb="0"]').click();
+        await expect(tree.locator('.timeline-bucket')).toHaveCount(6);
+        await page.locator('#timeline-crumbs [data-crumb="now"]').click();
+        await expect(page.locator('#timeline-crumbs')).toContainText('Day 41');
+        await expect(tree.locator('.timeline-node-live')).toHaveCount(1);
     });
 
     test('going back from the Timeline restores that state and keeps the line left behind', async ({ page }) => {

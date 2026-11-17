@@ -193,6 +193,7 @@ class StarshipGame {
                 level: 0, status: 'Normal',
                 capacity: 100, current: 0,
                 liquidL: 0, solidL: 0,
+                residueL: 0, // liquid the water maker processed but couldn't reclaim; only a dump clears it
                 liquidRateLhr: 0, solidRateLhr: 0, fillRateLhr: 0,
                 exposureHours: 0, // how long the tank has been full and backing up into the cabin
             },
@@ -202,11 +203,13 @@ class StarshipGame {
                 status: 'Normal',
                 rations: 0, eatRatePerDay: 0, daysLeft: Infinity, solidRateLhr: 0,
                 starvedHours: 0,
+                rationing: false, rationHours: 0, // half a ration a meal; hours underfed, paid back by full meals
             },
         };
     }
 
     _bindEvents() {
+        this._initDashboardLayout();
         document.getElementById('new-game-btn').addEventListener('click',  () => this._promptNewGame());
         document.getElementById('seed-regenerate-btn').addEventListener('click', () => {
             document.getElementById('seed-input').value = this.commsNav.rollSeed();
@@ -232,6 +235,12 @@ class StarshipGame {
             const box = this.fabrication.transferTarget();
             if (box) this.fabricationAction('transfer', { boxId: box.id });
         });
+
+        // Remembered so a result message can appear beside the button that caused it.
+        document.addEventListener('click', e => {
+            const pressed = e.target.closest('button, [role="button"]');
+            if (pressed) { this._lastPressed = pressed; this._lastPressedAt = performance.now(); }
+        }, true);
 
         // Fabrication & cargo buttons (Cargo Hold, Work Queue, market supplies)
         // are re-rendered constantly, so one delegated listener handles them.
@@ -285,6 +294,7 @@ class StarshipGame {
         document.getElementById('vent-toggle').addEventListener('click',  () => this.toggleVents());
 
         document.getElementById('water-ration-toggle').addEventListener('click', () => this.toggleWaterRationing());
+        document.getElementById('food-ration-toggle').addEventListener('click',  () => this.toggleFoodRationing());
         document.getElementById('blackwater-dump-btn').addEventListener('click', () => this.dumpBlackWater());
 
         document.getElementById('o2-target-input').addEventListener('change', e => {
@@ -652,6 +662,15 @@ class StarshipGame {
     // sustained past a day, starts a slow health drain (CrewManager). Disabling
     // after that grace period has passed rehydrates the crew with one lump
     // draw from the tank rather than gradually — see _canAffordRationReset().
+    // Half a ration a meal instead of one. Free either way: the cost is in the
+    // crew (slower work, then health after a week), and full meals pay it back.
+    toggleFoodRationing() {
+        if (!this.gameActive || this.gamePaused) return;
+        this.systems.food.rationing = !this.systems.food.rationing;
+        this.systemUpdate._updateFood(0); // rates and days left follow at once
+        this.updateDisplay();
+    }
+
     toggleWaterRationing() {
         if (!this.gameActive || this.gamePaused) return;
         const fresh = this.systems.freshWater;
@@ -677,28 +696,22 @@ class StarshipGame {
         return fresh.current >= cost;
     }
 
-    // Manually vent a player-chosen percentage of the black water tank to space —
-    // the only way to relieve the tank until reclamation processing exists.
+    // Vent the whole black water tank to space. Nobody dumps half a tank, so
+    // there's nothing to ask: everything goes, and the fine is charged.
     dumpBlackWater() {
         if (!this.gameActive || this.gamePaused) return;
         const black = this.systems.blackWater;
         if (black.current <= 0) return;
 
-        const fine  = this.BLACK_WATER_DUMP_FINE;
-        const input = prompt(
-            `Dump what percentage of the black water tank? (0-100)\n\nDumping waste is illegal. Every dump is detected and fined ${fine} credits.`, '50');
-        if (input === null) return;
-        const pct = parseFloat(input);
-        if (!isFinite(pct) || pct <= 0) return;
-
-        const fraction = Math.min(100, pct) / 100;
-        black.liquidL *= (1 - fraction);
-        black.solidL  *= (1 - fraction);
+        black.liquidL  = 0;
+        black.solidL   = 0;
+        black.residueL = 0;
         this.syncBlackWaterLevel();
 
         // The fine is charged per dump regardless of size, and can put the account into debt.
+        const fine = this.BLACK_WATER_DUMP_FINE;
         this.credits -= fine;
-        this._showSaveStatus(`Fined ${fine} credits for dumping waste`, true);
+        this._showSaveStatus(`Fined ${fine} credits for dumping waste`, true, document.getElementById('blackwater-dump-btn'));
         this.updateDisplay();
     }
 
@@ -707,7 +720,7 @@ class StarshipGame {
     // that's no longer full stops backing up, so exposure resets.
     syncBlackWaterLevel() {
         const black = this.systems.blackWater;
-        black.current = black.liquidL + black.solidL;
+        black.current = black.liquidL + black.solidL + (black.residueL || 0);
         black.level   = (black.current / black.capacity) * 100;
         if (black.level < this.systemUpdate.BLACK_WATER_FULL_PCT) black.exposureHours = 0;
     }
@@ -912,10 +925,105 @@ class StarshipGame {
         this._displayEnvironment();
         this._displayLocation();
         this._displayRepairQueue();
+        this._layoutCards();
         // Contacts and market access follow the transceiver's live range.
         if (Overlay.isOpen(this.commsNavScreen)) this._renderCommsNavScreen();
         // Anything that changed since the last redraw — a tick or a player action — goes on the list.
         this.notifications?.check();
+    }
+
+    // ── Dashboard layout: card groups and fixed-height cards ───────────────
+    // Every card has the same fixed height, so a message appearing in one
+    // never moves the rest of the dashboard. The part of a card that varies
+    // (`.card-details`: rates, projections, notes) is what gets clipped; the
+    // headline above it and the controls below it always show. A clipped card
+    // offers "More", which lets that one card grow. Groups collapse to each
+    // card's headline: its status and coloured gauge. Both choices are viewing
+    // preferences, not game state, so they live in localStorage.
+
+    _initDashboardLayout() {
+        this.DASHBOARD_LAYOUT_KEY = 'starshipOps.dashboardLayout';
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem(this.DASHBOARD_LAYOUT_KEY)) || {}; } catch { /* defaults */ }
+        this._collapsedGroups = new Set(Array.isArray(saved.collapsedGroups) ? saved.collapsedGroups : []);
+        this._expandedCards   = new Set(Array.isArray(saved.expandedCards)   ? saved.expandedCards   : []);
+
+        document.querySelectorAll('.card-group').forEach(group => {
+            group.querySelector('.card-group-header').addEventListener('click', () => {
+                const id = group.dataset.group;
+                if (this._collapsedGroups.has(id)) this._collapsedGroups.delete(id); else this._collapsedGroups.add(id);
+                this._saveDashboardLayout();
+                this._layoutCards();
+            });
+        });
+        document.getElementById('expand-all-btn').addEventListener('click', () => {
+            this._collapsedGroups.clear();
+            this._saveDashboardLayout();
+            this._layoutCards();
+        });
+        document.getElementById('collapse-all-btn').addEventListener('click', () => {
+            document.querySelectorAll('.card-group').forEach(g => this._collapsedGroups.add(g.dataset.group));
+            this._saveDashboardLayout();
+            this._layoutCards();
+        });
+
+        // A "More" toggle under each card's details; shown only when it's needed.
+        document.querySelectorAll('.system-card').forEach(card => {
+            const btn = document.createElement('button');
+            btn.className = 'card-more-btn';
+            btn.type = 'button';
+            btn.style.display = 'none';
+            btn.addEventListener('click', () => {
+                if (this._expandedCards.has(card.id)) this._expandedCards.delete(card.id); else this._expandedCards.add(card.id);
+                this._saveDashboardLayout();
+                this._layoutCards();
+            });
+            card.appendChild(btn);
+        });
+        this._layoutCards();
+    }
+
+    _saveDashboardLayout() {
+        try {
+            localStorage.setItem(this.DASHBOARD_LAYOUT_KEY, JSON.stringify({
+                collapsedGroups: [...this._collapsedGroups], expandedCards: [...this._expandedCards],
+            }));
+        } catch { /* not remembered this time */ }
+    }
+
+    // Runs after every redraw: applies collapsed/expanded state, works out
+    // which cards are clipping something, and sums up each group's status.
+    _layoutCards() {
+        if (!this._collapsedGroups) return;
+        document.querySelectorAll('.card-group').forEach(group => {
+            const collapsed = this._collapsedGroups.has(group.dataset.group);
+            group.classList.toggle('collapsed', collapsed);
+            group.querySelector('.card-group-header').setAttribute('aria-expanded', String(!collapsed));
+
+            let critical = 0, warning = 0;
+            group.querySelectorAll('.system-card').forEach(card => {
+                if (card.classList.contains('card-critical')) critical++;
+                else if (card.classList.contains('card-warning')) warning++;
+
+                const expanded = this._expandedCards.has(card.id);
+                card.classList.toggle('card-expanded', expanded);
+                const btn = card.querySelector('.card-more-btn');
+                if (collapsed) { btn.style.display = 'none'; return; }
+                // Measured with the toggle in place, so showing it can't make the
+                // details fit again and flip it back off next time.
+                const details = [...card.querySelectorAll('.card-details')].filter(d => d.getClientRects().length);
+                btn.style.display = '';
+                const clipped = !expanded && details.some(d => d.scrollHeight > d.clientHeight + 1);
+                details.forEach(d => d.classList.toggle('card-details-clipped', clipped));
+                btn.style.display = (clipped || expanded) ? '' : 'none';
+                btn.textContent   = expanded ? 'Less ▴' : 'More ▾';
+                btn.setAttribute('aria-expanded', String(expanded));
+            });
+
+            const statusEl = group.querySelector('.card-group-status');
+            statusEl.textContent = critical ? `${critical} critical` : warning ? `${warning} warning` : 'Nominal';
+            statusEl.className = 'card-group-status ' + (critical ? 'badge-critical' : warning ? 'badge-warning' : 'badge-normal');
+        });
     }
 
     // Suffix for a powered device's ON/OFF line when the ship can't supply it.
@@ -972,7 +1080,7 @@ class StarshipGame {
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
         btn.disabled     = !!sys.destroyed;
-        document.getElementById('card-o2').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-o2', sys.status);
 
         this._displayRepairPanel('o2', 'o2');
     }
@@ -1009,7 +1117,7 @@ class StarshipGame {
         btn.textContent = sys.active ? 'Disable Scrubber' : 'Enable Scrubber';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
         btn.disabled     = !!sys.destroyed;
-        document.getElementById('card-co2').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-co2', sys.status);
 
         this._displayRepairPanel('co2', 'co2');
     }
@@ -1052,7 +1160,7 @@ class StarshipGame {
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
         btn.disabled     = !!sys.destroyed;
-        document.getElementById('card-power').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-power', sys.status);
 
         this._displayRepairPanel('power', 'power');
     }
@@ -1072,7 +1180,7 @@ class StarshipGame {
         }
 
         this._setBadge('fuel-status-badge', sys.status);
-        document.getElementById('card-fuel').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-fuel', sys.status);
     }
 
     _displayFreshWater() {
@@ -1153,7 +1261,7 @@ class StarshipGame {
         }
 
         this._displayRationPreview(pastGrace);
-        document.getElementById('card-freshwater').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-freshwater', sys.status);
     }
 
     // While rationing is on: what full-rate use would be against what the
@@ -1207,11 +1315,16 @@ class StarshipGame {
         const fab     = this.fabrication;
         const rations = fab.rationsAboard();
         const nBoxes  = fab.foodBoxes().length;
-        const perDay  = fab.RATIONS_PER_CREW_DAY * this.crew;
+        const perMeal = food.rationing ? this.systemUpdate.FOOD_RATION_PER_MEAL : 1;
+        const perDay  = this.systemUpdate.MEAL_HOURS.length * perMeal * this.crew;
+        const units   = n => (Math.abs(n - Math.round(n)) < 1e-6 ? String(Math.round(n)) : n.toFixed(1)); // whole or half rations
 
-        document.getElementById('food-rations').textContent = rations.toFixed(1);
+        document.getElementById('food-rations').textContent = units(rations);
         document.getElementById('food-boxes').textContent   = `${nBoxes} box${nBoxes === 1 ? '' : 'es'}`;
-        document.getElementById('food-rate').textContent    = '−' + perDay.toFixed(1) + ' rations/day';
+        document.getElementById('food-rate').textContent    = '−' + units(perDay) + ' rations/day';
+        const nextMeal = food.nextMealIn ?? this.systemUpdate._nextMealIn(this.gameTime);
+        document.getElementById('food-next-meal').textContent =
+            `in ${this._fmtHrs(nextMeal / 3600)} (${units(perMeal * this.crew)} ration${perMeal * this.crew === 1 ? '' : 's'})`;
         document.getElementById('food-room').textContent    = Math.floor(fab.foodRoom()) + ' rations';
 
         const rtEl = document.getElementById('food-runtime');
@@ -1232,8 +1345,32 @@ class StarshipGame {
                 : `Starving — no food for ${Math.floor(starved)}h`;
         }
 
+        // Underfeeding: slower work at once, health only after a week on rations.
+        const cm = this.crewManager;
+        const underfed = food.rationHours ?? 0;
+        document.getElementById('food-underfed-row').style.display = underfed > 0 ? '' : 'none';
+        if (underfed > 0) {
+            const slower = Math.round((cm.FOOD_RATION_WORK_FACTOR - 1) * 100);
+            const el = document.getElementById('food-underfed');
+            if (!food.rationing) {
+                el.textContent = `recovering — ${this._fmtHrs(underfed / this.systemUpdate.FOOD_REFEED_RATE)} of full meals to go (${slower}% slower work)`;
+                el.className = 'rate-value';
+            } else if (underfed < cm.FOOD_RATION_GRACE_HOURS) {
+                el.textContent = `${slower}% slower work; health suffers in ${this._fmtHrs(cm.FOOD_RATION_GRACE_HOURS - underfed)}`;
+                el.className = 'rate-value';
+            } else {
+                el.textContent = `${slower}% slower work, and wearing health down`;
+                el.className = 'rate-value rate-neg';
+            }
+        }
+        document.getElementById('food-ration-status').innerHTML =
+            'Rationing: <strong>' + (food.rationing ? 'ON' : 'OFF') + '</strong>';
+        const rationBtn = document.getElementById('food-ration-toggle');
+        rationBtn.textContent = food.rationing ? 'Disable Rationing' : 'Enable Rationing';
+        rationBtn.className   = 'toggle-btn ' + (food.rationing ? 'btn-on' : 'btn-off');
+
         this._setBadge('food-status-badge', food.status);
-        document.getElementById('card-food').className = 'system-card' + this._cardMod(food.status);
+        this._setCardStatus('card-food', food.status);
     }
 
     _displayBlackWater() {
@@ -1246,15 +1383,23 @@ class StarshipGame {
         document.getElementById('blackwater-reclaim-row').style.display = this.systems.waterMaker.installed ? '' : 'none';
         document.getElementById('blackwater-reclaim').textContent  = '−' + reclaimLhr.toFixed(3) + ' L/hr';
 
+        const residueL = sys.residueL ?? 0;
+        document.getElementById('blackwater-residue-row').style.display = (this.systems.waterMaker.installed || residueL > 0) ? '' : 'none';
+        document.getElementById('blackwater-residue').textContent = residueL.toFixed(2) + ' L';
+
         // Explains a reclaim figure that's lower than the maker's output: it can
         // only take liquid, and the liquid has run out.
         const maker    = this.systems.waterMaker;
         const solidsEl = document.getElementById('blackwater-solids-note');
-        if (maker.installed && maker.active && sys.reclaimStarved && sys.solidL > 0) {
+        const leftL    = sys.solidL + residueL;
+        if (maker.installed && maker.active && sys.reclaimStarved && leftL > 0.05) {
             solidsEl.style.display = '';
+            const what = residueL > 0.05
+                ? `${leftL.toFixed(1)} L is solid matter and residue`
+                : `${leftL.toFixed(1)} L is solid matter`;
             solidsEl.textContent = sys.liquidL < 0.05
-                ? `All the liquid has been reclaimed. The remaining ${sys.solidL.toFixed(1)} L is solid matter the water maker can't process — dump it, or move it into a compost box.`
-                : `The water maker is reclaiming liquid as fast as it arrives. It can't process the ${sys.solidL.toFixed(1)} L of solid matter — dump it, or move it into a compost box.`;
+                ? `All the reclaimable liquid has been reclaimed. The remaining ${what} the water maker can't process — dump the tank (solids can go to a compost box).`
+                : `The water maker is reclaiming liquid as fast as it arrives. The other ${what} it can't process — dump the tank (solids can go to a compost box).`;
         } else {
             solidsEl.style.display = 'none';
         }
@@ -1286,7 +1431,7 @@ class StarshipGame {
         } else {
             exposureRow.style.display = 'none';
         }
-        document.getElementById('card-blackwater').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-blackwater', sys.status);
     }
 
     _displayTransceiver() {
@@ -1315,7 +1460,7 @@ class StarshipGame {
         btn.textContent = sys.active ? 'Disable Transceiver' : 'Enable Transceiver';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
         btn.disabled    = !!sys.destroyed;
-        document.getElementById('card-transceiver').className = 'system-card' + this._cardMod(sys.status);
+        this._setCardStatus('card-transceiver', sys.status);
 
         this._displayRepairPanel('transceiver', 'transceiver');
     }
@@ -1337,16 +1482,27 @@ class StarshipGame {
             badge.textContent = 'NOT FITTED';
             badge.className   = 'status-badge badge-warning';
         }
-        document.getElementById('card-watermaker').className =
-            'system-card' + (installed ? this._cardMod(sys.status) : ' card-unfitted');
+        this._setCardStatus('card-watermaker', installed ? sys.status : 'Normal', !installed);
         if (!installed) return;
 
-        const sourceLabel = {
-            blackWater: 'Reclaiming black water', atmosphere: 'Condensing from outside air (low power)',
-            full: 'Fresh tank full', none: sys.active ? 'Nothing to process' : '—',
-        }[sys.source ?? 'none'];
+        // Black water is always used first; air only makes up what it can't.
+        const fromBlack = sys.fromBlackLhr ?? 0, fromAir = sys.fromAirLhr ?? 0;
+        const made = fromBlack + fromAir;
+        const blackPct = made > 0 ? Math.round(fromBlack / made * 100) : 0;
+        const sourceLabel = made > 0
+            ? (fromAir <= 0 ? 'Reclaiming black water'
+              : fromBlack <= 0 ? 'Condensing from outside air (low power)'
+              : 'Black water, topped up from outside air')
+            : { full: 'Fresh tank full', none: sys.active ? 'Nothing to process' : '—' }[sys.source] ?? '—';
         document.getElementById('watermaker-rated').textContent  = (sys.ratedLhr ?? 0).toFixed(2) + ' L/hr';
         document.getElementById('watermaker-source').textContent = sourceLabel;
+        document.getElementById('watermaker-split').style.display = made > 0 ? '' : 'none';
+        document.getElementById('watermaker-split-black').style.width = blackPct + '%';
+        document.getElementById('watermaker-split-air').style.width   = (100 - blackPct) + '%';
+        document.getElementById('watermaker-split-black-pct').textContent = blackPct + '%';
+        document.getElementById('watermaker-split-air-pct').textContent   = (100 - blackPct) + '%';
+        document.getElementById('watermaker-yield').textContent =
+            sys.reclaimYield != null ? Math.round(sys.reclaimYield * 100) + '% (rest stays as residue)' : '—';
         document.getElementById('watermaker-draw').textContent   = (sys.drawW ?? 0) > 0 ? '−' + sys.drawW.toFixed(2) + ' W' : '0.00 W';
 
         document.getElementById('watermaker-status').innerHTML =
@@ -1531,7 +1687,10 @@ class StarshipGame {
         const others = idle.length > 1 ? ` (and ${idle.length - 1} more)` : '';
         document.getElementById('crew-idle-text').textContent =
             `Crew ${number}${others}: “I'm rostered ${hours} hours a day and there's nothing for me to do.”`;
-        noteEl.style.display = '';
+        if (noteEl.style.display === 'none') {
+            noteEl.style.display = '';
+            Anchor.attach(noteEl, '#crew-stat'); // floats under the Crew counter, wherever it is
+        }
     }
 
     _openCrewScreen() {
@@ -2550,15 +2709,25 @@ class StarshipGame {
         document.getElementById('power-target-input').value = pwr.target != null ? pwr.target : '';
     }
 
-    _showSaveStatus(msg, isError = false) {
+    // A short-lived result message, floated beside what it's about (anchor.js)
+    // so it never shifts the layout: `anchorEl` if given, else the button the
+    // player just pressed, else the header's action buttons (autosaves).
+    _showSaveStatus(msg, isError = false, anchorEl = null) {
         const el = document.getElementById('save-status');
         if (!el) return;
-        el.textContent = msg;
-        el.className   = 'save-status ' + (isError ? 'save-error' : 'save-ok');
+        const recent = this._lastPressed && performance.now() - this._lastPressedAt < 1500 ? this._lastPressed : null;
+        const source = anchorEl ?? recent;
+        const onScreen = n => n && n.isConnected && n.getClientRects().length > 0;
+        el.textContent   = msg;
+        el.className     = 'save-status callout ' + (isError ? 'save-error' : 'save-ok');
+        el.style.display = '';
+        Anchor.attach(el, () => onScreen(source) ? source : '#header-actions');
         clearTimeout(this._saveStatusTimer);
         this._saveStatusTimer = setTimeout(() => {
-            el.textContent = '';
-            el.className   = 'save-status';
+            el.textContent   = '';
+            el.className     = 'save-status callout';
+            el.style.display = 'none';
+            Anchor.detach(el);
         }, 3000);
     }
 
@@ -2573,6 +2742,16 @@ class StarshipGame {
 
     _cardMod(status) {
         return status === 'Critical' ? ' card-critical' : status === 'Warning' ? ' card-warning' : '';
+    }
+
+    // Only the status classes change; the card's layout classes (expanded,
+    // overflowing) belong to _layoutCards.
+    _setCardStatus(id, status, unfitted = false) {
+        const card = document.getElementById(id);
+        if (!card) return;
+        card.classList.toggle('card-critical', status === 'Critical');
+        card.classList.toggle('card-warning',  status === 'Warning');
+        card.classList.toggle('card-unfitted', unfitted);
     }
 
     _escapeHtml(str) {

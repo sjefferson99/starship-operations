@@ -24,9 +24,10 @@ test.describe('food', () => {
         });
         expect(r.boxes).toEqual([{ kind: 'food', size: 'standard', fillL: 15 }]);
         expect(r.rations).toBe(15);
-        await expect(page.locator('#food-rations')).toHaveText('15.0');
+        await expect(page.locator('#food-rations')).toHaveText('15');
         await expect(page.locator('#food-boxes')).toHaveText('1 box');
-        await expect(page.locator('#food-rate')).toHaveText('−3.0 rations/day');
+        await expect(page.locator('#food-rate')).toHaveText('−3 rations/day');
+        await expect(page.locator('#food-next-meal')).toHaveText('in 7h (1 ration)');
         await expect(page.locator('#food-runtime')).toHaveText('5.0 days');
         await expect(page.locator('#food-room')).toHaveText('35 rations');
     });
@@ -45,36 +46,100 @@ test.describe('food', () => {
         expect(r.status).toBe('Normal');
     });
 
-    test('food runs low, then out: the starvation clock runs, then hurts after three days, and stops once there is food', async ({ page }) => {
+    test('food runs low, then out: the starvation clock runs from the missed meal, hurts after three days, and stops at the next full meal', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
         const r = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
+            const advance = s => { g.gameTime += s; g.systemUpdate.update(s); };
             g.crewManager.update = () => {}; // keep the crew alive (and eating) through days without water
+            g.gameTime = 0;
             fab.boxes()[0].fillL = 6; // two days
-            g.systemUpdate.update(60);
+            advance(60);
             const low = g.systems.food.status;
 
-            // One huge tick: eats the last rations in the first 2 days, then 1 day hungry.
-            g.systemUpdate.update(3600 * 24 * 3);
+            // One huge tick to 72:00. The 6 rations last to day 2's dinner; day 3's
+            // breakfast (55:00) is the first missed meal.
+            advance(3600 * 24 * 3 - 60);
             const out = { status: g.systems.food.status, starved: g.systems.food.starvedHours,
-                          boxKind: fab.boxes()[0].kind, solids: g.systems.blackWater.solidL };
+                          boxKind: fab.boxes()[0].kind };
             const earlyHarm = g.crewManager.healthImpactBreakdown().map(i => i.label);
 
-            g.systemUpdate.update(3600 * 24 * 3);
+            advance(3600 * 24 * 3);
             const lateHarm = g.crewManager.healthImpactBreakdown().map(i => i.label);
 
             fab._storeRations(5);
-            g.systemUpdate.update(60);
-            return { low, out, earlyHarm, lateHarm, fedAgain: g.systems.food.starvedHours };
+            advance(3600);          // 73:00 — no meal yet, still hungry
+            const beforeMeal = g.systems.food.starvedHours;
+            advance(6 * 3600);      // past 79:00 (breakfast)
+            return { low, out, earlyHarm, lateHarm, beforeMeal, fedAgain: g.systems.food.starvedHours, left: fab.rationsAboard() };
         });
         expect(r.low).toBe('Warning');
         expect(r.out.status).toBe('Critical');
-        expect(r.out.starved).toBeCloseTo(24, 1); // less the minute eaten before
+        expect(r.out.starved).toBeCloseTo(17, 5);
         expect(r.out.boxKind).toBe(null); // eaten empty, so free for anything again
         expect(r.earlyHarm.some(l => /Starvation/.test(l))).toBe(false);
         expect(r.lateHarm.some(l => /Starvation/.test(l))).toBe(true);
+        expect(r.beforeMeal).toBeGreaterThan(17 + 72);
         expect(r.fedAgain).toBe(0);
+        expect(r.left).toBe(4);
+    });
+
+    test('rations go down a whole one per person per meal, or half while rationed', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+        const r = await page.evaluate(() => {
+            const g = window.game, fab = g.fabrication;
+            const advance = s => { g.gameTime += s; g.systemUpdate.update(s); };
+            g.crewManager.update = () => {}; // nothing aboard is running; keep the crew alive to eat
+            g.gameTime = 0;
+            const seen = [];
+            for (let h = 0; h < 14; h++) { advance(3600); seen.push(fab.rationsAboard()); }
+            g.toggleFoodRationing();
+            advance(6 * 3600);  // dinner at 19:00, rationed
+            g.updateDisplay();
+            return { seen, rationed: fab.rationsAboard(), shown: document.getElementById('food-rations').textContent,
+                   };
+        });
+        // Breakfast at 07:00 and lunch at 13:00 — nothing in between.
+        expect(r.seen).toEqual([15, 15, 15, 15, 15, 15, 14, 14, 14, 14, 14, 14, 13, 13]);
+        expect(r.rationed).toBe(12.5);
+        await expect(page.locator('#food-rations')).toHaveText('12.5');
+        await expect(page.locator('#food-rate')).toHaveText('−1.5 rations/day');
+        await expect(page.locator('#food-ration-toggle')).toHaveText('Disable Rationing');
+    });
+
+    test('rationed food slows work at once, harms health only after a week, and full meals pay it back', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+        const r = await page.evaluate(() => {
+            const g = window.game, cm = g.crewManager, food = g.systems.food;
+            const advance = s => { g.gameTime += s; g.systemUpdate.update(s); };
+            g.crewManager.update = () => {};
+            g.fabrication._storeRations(30);
+            g.gameTime = 0;
+            g.toggleFoodRationing();
+            advance(3600);
+            const atOnce = { work: cm.hungerWorkFactor(), harm: cm.healthImpactBreakdown().map(i => i.label) };
+            for (let d = 0; d < 7; d++) advance(86400);
+            const afterWeek = cm.healthImpactBreakdown().find(i => /rationing/.test(i.label));
+            g.toggleFoodRationing();
+            const offHarm = cm.healthImpactBreakdown().some(i => /rationing/.test(i.label));
+            advance(86400);
+            const dayLater = food.rationHours;
+            g.toggleFoodRationing(); g.toggleFoodRationing(); // flicking it doesn't reset anything
+            const flicked = food.rationHours;
+            for (let d = 0; d < 3; d++) advance(86400);
+            return { atOnce, afterWeek, offHarm, dayLater, flicked, paidBack: food.rationHours, work: cm.hungerWorkFactor() };
+        });
+        expect(r.atOnce.work).toBeCloseTo(1.15, 5);
+        expect(r.atOnce.harm.some(l => /rationing/.test(l))).toBe(false);
+        expect(r.afterWeek.ratePctPerHr).toBeCloseTo(100 / (30 * 24), 5);
+        expect(r.offHarm).toBe(false);
+        expect(r.dayLater).toBeCloseTo(7 * 24 + 1 - 48, 5);
+        expect(r.flicked).toBeCloseTo(r.dayLater, 5);
+        expect(r.paidBack).toBe(0);
+        expect(r.work).toBe(1);
     });
 
     test('rations are bought by the case into food boxes, then empty boxes, and refused with no room', async ({ page }) => {
@@ -110,18 +175,21 @@ test.describe('food', () => {
         await expect(page.locator('[data-fab-action="buyFood"]')).toBeDisabled();
     });
 
-    test('food and its starvation clock survive save and load; an old save without food gets starter rations', async ({ page }) => {
+    test('food, its starvation clock and rationing survive save and load; an old save without food gets starter rations', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
         const r = await page.evaluate(async () => {
             const g = window.game;
             g.cargo.boxes[0].fillL = 7.25;
             g.systems.food.starvedHours = 5;
+            g.systems.food.rationing = true;
+            g.systems.food.rationHours = 30;
             await g.saveGame();
             g.cargo.boxes = [];
-            g.systems.food.starvedHours = 0;
+            Object.assign(g.systems.food, { starvedHours: 0, rationing: false, rationHours: 0 });
             await GameState.loadServer(g, g.saveId);
-            const loaded = { boxes: g.cargo.boxes.map(b => ({ kind: b.kind, fillL: b.fillL })), starved: g.systems.food.starvedHours };
+            const loaded = { boxes: g.cargo.boxes.map(b => ({ kind: b.kind, fillL: b.fillL })), starved: g.systems.food.starvedHours,
+                             rationing: g.systems.food.rationing, rationHours: g.systems.food.rationHours };
 
             const world = GameState.snapshot(g);
             const ships = GameState.shipInstanceSnapshot(g);
@@ -130,7 +198,7 @@ test.describe('food', () => {
             GameState.restore(g, world, ships);
             return { loaded, legacy: g.cargo.boxes.map(b => ({ kind: b.kind, fillL: b.fillL })) };
         });
-        expect(r.loaded).toEqual({ boxes: [{ kind: 'food', fillL: 7.25 }], starved: 5 });
+        expect(r.loaded).toEqual({ boxes: [{ kind: 'food', fillL: 7.25 }], starved: 5, rationing: true, rationHours: 30 });
         expect(r.legacy).toEqual([{ kind: 'food', fillL: 15 }]);
     });
 });

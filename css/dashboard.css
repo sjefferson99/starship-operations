@@ -129,11 +129,61 @@
     gap: 20px;
 }
 
-/* ── Systems grid ── */
+/* ── Systems dashboard: groups of cards (main.js _layoutCards) ── */
+.dashboard-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-bottom: -8px;
+}
+.group-all-btn { padding: 5px 12px; font-size: 0.76rem; }
 .system-dashboard {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    --card-h: 640px; /* every card the same height, so nothing moves as messages come and go */
+    display: flex;
+    flex-wrap: wrap;
     gap: 20px;
+}
+/* A group is as wide as its cards want, sharing a row with others where they fit. */
+.card-group {
+    flex: var(--cards, 2) 1 calc(var(--cards, 2) * 280px + (var(--cards, 2) - 1) * 16px);
+    min-width: min(100%, 280px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+#group-life-support { --cards: 4; }
+#group-water { --cards: 3; }
+.card-group-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 12px;
+    background: rgba(13, 43, 69, 0.6);
+    border: 1px solid rgba(0, 150, 255, 0.2);
+    border-radius: 10px;
+    color: #b3e5fc;
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    text-align: left;
+}
+.card-group-header:hover { transform: none; box-shadow: none; border-color: rgba(0, 198, 255, 0.5); }
+.card-group-caret { display: inline-block; transition: transform 0.2s; }
+.card-group.collapsed .card-group-caret { transform: rotate(-90deg); }
+.card-group-title { flex: 1; }
+.card-group-status {
+    font-size: 0.66rem;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 20px;
+}
+.card-group-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    align-items: start;
 }
 
 /* ── System cards ── */
@@ -1061,33 +1111,43 @@
 .market-buy-btn { white-space: nowrap; flex-shrink: 0; }
 .market-buy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* ── Floating callouts (anchor.js): laid over the page, pinned to their element ── */
+.anchored {
+    position: fixed;
+    top: 0; left: 0;
+    z-index: 900; /* over the dashboard, under overlay screens (1000) and the tour */
+}
+.anchored.anchored-lost { visibility: hidden; }
+/* A pointer at the target: on the top edge, or the bottom edge when the callout sits above. */
+.callout::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    left: calc(var(--arrow-x, 50%) - 5px);
+    width: 10px;
+    height: 10px;
+    background: inherit;
+    border-left: 1px solid var(--callout-border, transparent);
+    border-top: 1px solid var(--callout-border, transparent);
+    transform: rotate(45deg);
+}
+.callout.anchored-above::before { top: auto; bottom: -6px; transform: rotate(225deg); }
+
 /* ── Crew idle note: a speech bubble hanging off the header's Crew counter ── */
 .crew-idle-note {
-    position: relative;
+    --callout-border: rgba(255, 167, 38, 0.5);
     display: flex;
     align-items: center;
     gap: 8px;
     max-width: 380px;
-    margin-right: 64px; /* sits under the Crew counter rather than the Tour pill */
     padding: 6px 10px 6px 12px;
-    background: rgba(255, 167, 38, 0.14);
-    border: 1px solid rgba(255, 167, 38, 0.5);
+    background: #2a2416;
+    border: 1px solid var(--callout-border);
     border-radius: 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
     font-size: 0.76rem;
     color: #ffe0b2;
     line-height: 1.35;
-}
-.crew-idle-note::before {
-    content: '';
-    position: absolute;
-    top: -6px;
-    right: 26px;
-    width: 10px;
-    height: 10px;
-    background: #2a2416;
-    border-left: 1px solid rgba(255, 167, 38, 0.5);
-    border-top: 1px solid rgba(255, 167, 38, 0.5);
-    transform: rotate(45deg);
 }
 .crew-idle-text { cursor: pointer; }
 .crew-idle-text:hover { text-decoration: underline; }
@@ -1368,3 +1428,73 @@
     color: #78909c;
 }
 .notification-dismiss:hover { background: none; color: #ef9a9a; transform: none; box-shadow: none; }
+
+/* The result-of-an-action toast (main.js _showSaveStatus) floats beside its
+   button, above overlay screens so it shows for actions taken in them too. */
+#save-status.anchored { z-index: 1500; pointer-events: none; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); white-space: nowrap; }
+#save-status.save-ok    { --callout-border: rgba(76, 175, 80, 0.5); background: #10261a; }
+#save-status.save-error { --callout-border: rgba(244, 67, 54, 0.5); background: #2c1414; }
+
+/* ── Fixed-height cards (main.js _layoutCards) ──
+   The headline and the controls keep their size; the details between them
+   take what's left and clip, with a "More" toggle when they do. */
+.system-card { height: var(--card-h); }
+.system-card > *, .card-section > * { flex-shrink: 0; }
+.system-card > .card-details, .card-section > .card-details,
+.system-card > .card-section { flex: 1 1 auto; min-height: 0; }
+.card-details {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+    position: relative;
+}
+.card-details-clipped::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 28px;
+    background: linear-gradient(to bottom, rgba(22, 32, 50, 0), #162032);
+    pointer-events: none;
+}
+.system-card.card-expanded { height: auto; min-height: var(--card-h); }
+.card-expanded .card-details { overflow: visible; }
+.card-more-btn {
+    align-self: center;
+    padding: 2px 14px;
+    font-size: 0.72rem;
+    background: rgba(0, 150, 255, 0.12);
+    border: 1px solid rgba(0, 150, 255, 0.3);
+    color: #81d4fa;
+    order: 0;
+}
+.card-more-btn:hover { transform: none; box-shadow: none; background: rgba(0, 150, 255, 0.22); }
+
+/* Collapsed group: each card down to its headline, the status and its coloured bar. */
+.card-group.collapsed .system-card { height: auto; min-height: 0; gap: 8px; padding: 14px 16px 12px; }
+.card-group.collapsed .system-card > :not(.card-header):not(.gauge-container),
+.card-group.collapsed .gauge-scale { display: none !important; }
+.card-group.collapsed .card-header h3 { font-size: 0.9rem; }
+
+/* Water maker: where its output comes from this hour. */
+.source-split { display: flex; flex-direction: column; gap: 4px; }
+.source-split-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.06); }
+.source-split-black { background: #8d6e63; }
+.source-split-air   { background: #4fc3f7; }
+.source-split-legend { display: flex; justify-content: space-between; font-size: 0.72rem; color: #90a4ae; }
+.source-key-black::before, .source-key-air::before { content: '\25A0\00a0'; }
+.source-key-black::before { color: #8d6e63; }
+.source-key-air::before   { color: #4fc3f7; }
+
+/* Timeline roll-up (timeline.js): period dots and the breadcrumb above the tree. */
+.timeline-crumbs { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.timeline-crumbs:empty { display: none; }
+.timeline-crumb-trail { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.timeline-crumb { padding: 3px 10px; font-size: 0.74rem; }
+.timeline-crumb:disabled { opacity: 1; cursor: default; background: none; border-color: transparent; color: #e0f7fa; transform: none; box-shadow: none; }
+.timeline-crumb-sep { color: #546e7a; }
+.timeline-bucket { cursor: pointer; }
+.timeline-bucket circle { fill: #0d3a5c; stroke: #4fc3f7; stroke-width: 1.5; }
+.timeline-bucket:hover circle { stroke: #e0f7fa; stroke-width: 2.5; }
+.timeline-bucket text { fill: #e0f7fa; font-size: 10px; font-weight: 600; text-anchor: middle; pointer-events: none; }
+.timeline-bucket-selected circle { stroke: #ffffff; stroke-width: 2.5; }

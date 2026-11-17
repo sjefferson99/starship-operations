@@ -91,6 +91,7 @@ class Tour {
                 target: '#card-food',
                 body: `<p>You have five days of <strong>food rations</strong> in a storage box. Each crew member eats three a day.</p>
                        <p>When they run low, buy more on the planet's market — they need a storage box with room. Run out and nothing happens for three days, then hunger starts to wear the crew down.</p>
+                       <p><strong>Rationing</strong> halves each meal. The crew work a little slower while underfed, and after a week it starts to wear on their health — far gentler than going without.</p>
                        <p>What's eaten ends up as solid waste in the black water tank.</p>`,
             },
             {
@@ -227,7 +228,7 @@ class Tour {
                 title: 'Food is running low',
                 target: '#card-food',
                 when: g => g.systems.food.status === 'Warning' && g.fabrication.rationsAboard() > 0,
-                body: `<p>Less than three days of rations left. Buy more on the planet's market (Comms &amp; Nav) — a case is 10 rations.</p>
+                body: `<p>Less than three days of rations left. Buy more on the planet's market (Comms &amp; Nav) — a case is 10 rations. Rationing food on the Food Stores card makes what's left last twice as long, at the cost of slower work.</p>
                        <p>Rations are stored in storage boxes: they fill food boxes first, then empty ones. If every box is in use, fabricate another from the Work Queue.</p>`,
             },
             {
@@ -262,7 +263,7 @@ class Tour {
                 title: 'Water maker repaired',
                 target: '#card-watermaker',
                 when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) >= 50 && !w.active && !queued(g, 'waterMaker'); },
-                body: `<p>Switch it on. It reclaims black water into fresh water — which also keeps the waste tank down — and on a planet it tops up from the outside air.</p>
+                body: `<p>Switch it on. It reclaims black water into fresh water — which also keeps the waste tank down — and on a planet it tops up from the outside air. Black water always goes first; the card shows the split.</p>
                        <p>It's the hungriest thing aboard — 30 W while reclaiming waste, less while condensing from air — so without the generator running it will flatten the battery in a few hours. You can come off rationing once the tank can cover it: after a day on short rations that takes a one-off 50 L per person to rehydrate, so the button stays greyed out until there's that much in the tank.</p>`,
             },
             {
@@ -350,7 +351,7 @@ class Tour {
                 target: '#crew-stat',
                 when: g => g.crewManifest.some(m => !m.dead && g.crewManager.dutyHours(m) > g.crewManager.FATIGUE_OK_HOURS),
                 body: `<p>Someone is scheduled for more than 12 hours a day. Their health is being worn down toward a ceiling that drops sharply with each extra hour, and poor health makes them slower in turn.</p>
-                       <p>Fine for a short push; cut the hours back afterwards and they recover.</p>`,
+                       <p>Fine for a short push; cut the hours back afterwards and they recover — a new roster takes about a day to settle in, either way.</p>`,
             },
             {
                 id: 'crew-unconscious',
@@ -382,7 +383,7 @@ class Tour {
                 target: '#card-blackwater',
                 when: g => g.systems.blackWater.level >= 70,
                 body: `<p>Used water ends up here. If the tank fills completely it overflows into the cabin and makes the crew ill.</p>
-                       <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims the liquid instead — though not the solid matter, which slowly builds up until it's dumped.</p>`,
+                       <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims most of the liquid instead — about a tenth stays behind as residue, and the solid matter isn't touched, so both slowly build up until the tank is dumped.</p>`,
             },
             {
                 id: 'space-low',

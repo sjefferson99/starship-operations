@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `rng.js` → `game_state.js` → `system_update.js` →
-`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `notifications.js` → `main.js` → `sound.js`. That order is load-bearing —
+`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `notifications.js` → `anchor.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -65,7 +65,9 @@ unpowered or switched-off transceiver shows nothing but the ship's own position.
 range, enough credits, and either a module slot that is empty or destroyed — `dest: 'fit'` — or an
 empty machine storage box — `dest: 'store'`). The **water maker** reclaims
 black-water liquid into fresh water first and, in a breathable atmosphere, makes up the rest from
-outside air.
+outside air (the card shows the split, `fromBlackLhr`/`fromAirLhr`). Only `reclaimYield` (module spec,
+0.9) of the liquid processed comes back; the rest stays in the tank as `blackWater.residueL`, which
+counts toward the tank and only a dump clears. Dumping always empties the whole tank — there's no prompt.
 
 **Saves are named slots, not one implicit save.** New Game always starts from pure
 `_defaultSystems()` defaults (never resumes from a prior save) and prompts for a name via a
@@ -122,13 +124,19 @@ Boxes, supplies and boxes being made count toward `_computeShipCapacity()`, and 
 refused when it wouldn't fit (`Fabrication.spaceBlocker`). Persisted in `ship_cargo_items` and
 `storage_boxes`; `repair_tasks` gained `kind`/`recipe_key`.
 
-**Food is a box kind, and the only source of solid waste.** Rations (`RATIONS_PER_CREW_DAY` = 3 per crew member) are
+**Food is a box kind, and the only source of solid waste.** Rations are
 bought by the case (`Fabrication.FOOD`, not in `ITEMS`) and stored as `kind: 'food'` boxes, `fillL`
 counting rations: they top up food boxes, then claim empty standard boxes, and are refused with no
-room. `SystemUpdate._updateFood` eats from the emptiest food box (a box eaten empty goes back to
+room. Eating is discrete: at each meal time on the ship's clock (`SystemUpdate.MEAL_HOURS`, 07/13/19) every
+living member eats one whole ration, or `FOOD_RATION_PER_MEAL` (half) while `food.rationing` — meals are
+found from `gameTime` (`_mealTimesBetween`), so code that calls `systemUpdate.update(dt)` must advance
+`gameTime` too. A meal short of food is missed and starts `starvedHours`; the next full meal resets it.
+Rationing builds `food.rationHours` (paid back at `FOOD_REFEED_RATE`× by full meals, so toggling can't
+reset it): crew work `FOOD_RATION_WORK_FACTOR` slower while it's above 0, and health only declines after
+`FOOD_RATION_GRACE_HOURS` (a week). `_updateFood` eats from the emptiest food box (a box eaten empty goes back to
 unassigned) and turns what was eaten into `blackWater.solidL` (`SOLID_WASTE_L_PER_RATION`); water
 use now only makes the liquid. `systems.food` holds the derived reading plus `starvedHours`, which
-drives `CrewManager`'s starvation impact after `FOOD_GRACE_HOURS` (persisted in `ship_food`). A new
+drives `CrewManager`'s starvation impact after `FOOD_GRACE_HOURS` (all persisted in `ship_food`). A new
 ship starts with one box of `STARTER_RATIONS`, and so does a payload from before food existed
 (`GameState._hasFoodState`).
 
@@ -154,9 +162,12 @@ health based on continuous O2-low/CO2-high severity (reusing the same threshold 
 `SystemUpdate._updateStatuses`) plus a per-member `varianceFactor` rolled once at creation, so
 crew don't all decline in lockstep. Health <20% marks a member unavailable for repair work
 (`isAvailable`); health hitting 0 sets `dead: true` permanently — there's no reviving a dead
-crew member even if the environment recovers. Two further health sources live here: **overwork**
+crew member even if the environment recovers. Recovery (`RECOVERY_PCT_PER_HR`) is deliberately much slower
+than decline — about a day from 0 to 100% — so toggling a control off and on can't buy health back. Two further health sources live here: **overwork**
 is per member, from scheduled hours per day (`dutyHours`, overlaps counted once) — free to 8h, only
-slower work to 12h (`fatigueWorkFactor`), and beyond that health is pulled down to a ceiling
+slower work to 12h (`fatigueWorkFactor`); all fatigue works from `restedDutyHours`, which follows the
+scheduled hours with a ~6h time constant (persisted per member), so a roster change settles in over about
+a day rather than at once, and beyond that health is pulled down to a ceiling
 (`fatigueHealthCap`) that falls non-linearly to 0 at 24h; and **sewage exposure** while the black
 water tank is full (`blackWater.exposureHours`), an immediate drain that steepens hourly plus a
 rising per-hour chance of a lump-damage infection. Dumping the tank resets exposure and costs a
@@ -228,6 +239,18 @@ Vent toggles are deliberately not listed (the player's own click). Events with n
 `key` and title are grouped with a count rather than repeated. The list is game state: saved as
 `world.notifications` (the `notifications` table) and restored by `GameState.restore`, which also resets
 the baseline so nothing is listed on arrival.
+
+**The dashboard is grouped cards of fixed height** (`main.js` `_initDashboardLayout`/`_layoutCards`, run
+after every redraw). Every `.system-card` is `--card-h` tall so a message appearing never moves the layout;
+the part that varies sits in `.card-details`, which clips, and the card then offers a "More" toggle. Groups
+(`.card-group`) collapse to each card's header and gauge bar; Expand/Collapse all sit above them. Both are
+viewing preferences in `localStorage` (`starshipOps.dashboardLayout`), not game state. Card status is set
+with `_setCardStatus` (class toggles) — never overwrite a card's `className`. **Floating messages are
+anchored** (`anchor.js`, `Anchor.attach(el, target)`): the idle-crew note and the action-result toast
+(`_showSaveStatus`, placed beside the button just pressed) are `position: fixed` and re-measured against
+their target every frame, so put new callouts there rather than in the header's flow. **The Timeline rolls
+up** long games into 4-week months, weeks and days (`_topUnit`, `_view`, a breadcrumb `_path`); a game
+under two days shows every checkpoint at once.
 
 **`window.game`** is deliberately exposed in `main.js` so `tests/*.spec.js` can drive internal
 state directly in a real browser via Playwright, rather than re-implementing game logic in the

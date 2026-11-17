@@ -340,7 +340,8 @@ class Notifications {
         if (!this.pillEl) return;
         const n = this.list.length;
         this.countEl.textContent = n;
-        this.countEl.style.display = n ? '' : 'none';
+        // Hidden, not removed, so the pill keeps its width and the header never reflows.
+        this.countEl.style.visibility = n ? '' : 'hidden';
         const worst = this._worstLevel();
         this.pillEl.classList.toggle('stat-critical', worst === 'critical');
         this.pillEl.classList.toggle('stat-warning', worst === 'warning');
