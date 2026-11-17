@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `game_state.js` → `system_update.js` →
-`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `main.js`. That order is load-bearing —
+`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -146,6 +146,19 @@ Playwright `page` fixture in `tests/helpers.js` pre-sets the seen flag (and swit
 card never covers controls other specs click; `tests/tour.spec.js` clears them again. Specs about
 Comms & Nav call `bringCommsOnline(page)` from the same helpers, since a new ship's transceiver
 reaches nothing.
+
+**Sound (`sound.js`, `SoundManager`) is an observer and the one exception to the load order:** it
+loads *after* `main.js`, creates itself (`window.sound`) once `window.game` exists, and nothing in the
+game calls it. UI sounds come from a single delegated document click listener; everything else (hum
+level, alert chimes, repairs landing, vents, purchases, dumps) comes from diffing a small state
+snapshot every 400 ms in `_poll()`. All audio is synthesised with the Web Audio API — there are no
+audio files — and the `AudioContext` is only created on the first user gesture. To add a sound, add
+a recipe to `_recipes()` and a trigger in `_onClick()` or `_poll()`; don't add calls into it from
+game code. Loudness is mixed per channel — buttons, effects, alerts, systems hum, plus a master —
+set by the player in the Sounds panel (`#sound-screen`, which `sound.js` also owns) and stored in
+`localStorage`; a recipe's own `gain` is only its level relative to others in the same channel, and
+`BASE` sets what each channel's default slider position means. The intended tone is calm (soft chimes, never alarms). `sound.log` records which sounds
+were requested, which is what `tests/sound.spec.js` asserts on.
 
 **`window.game`** is deliberately exposed in `main.js` so `tests/*.spec.js` can drive internal
 state directly in a real browser via Playwright, rather than re-implementing game logic in the

@@ -71,6 +71,7 @@
                         <div class="stat">Credits: <span id="credits">1000</span></div>
                         <div class="stat stat-clickable" id="crew-stat">Crew: <span id="crew">1</span></div>
                         <div class="stat stat-clickable" id="tour-btn" role="button" title="Replay the tutorial">Tour</div>
+                        <div class="stat stat-clickable" id="sound-toggle" role="button">Sounds</div>
                     </div>
                     <!-- Crew speaking up: on a long roster, on shift, nothing to do (main.js _displayCrewIdleNote) -->
                     <div class="crew-idle-note" id="crew-idle-note" style="display:none">
@@ -728,6 +729,25 @@
         </div>
     </div>
 
+    <!-- Sound settings (sound.js builds the slider rows and owns all of this) -->
+    <div id="sound-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <h2>Sounds</h2>
+                <button id="sound-screen-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+            <div class="system-controls">
+                <span id="sound-enabled-status">Sounds: <strong>ON</strong></span>
+                <button id="sound-enabled-toggle" class="toggle-btn btn-on">Turn All Sounds Off</button>
+            </div>
+            <div id="sound-channel-rows" class="sound-rows"></div>
+            <div class="sound-footer">
+                <span class="sound-footer-note">40% is the standard level for each. Saved in this browser.</span>
+                <button id="sound-reset-btn" class="repair-queue-btn">Reset to Defaults</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Guided tutorial (tour.js). The layer itself ignores the mouse so the
          spotlighted control underneath stays clickable; only the card takes clicks. -->
     <div id="tour-layer" class="tour-layer" style="display: none;">
@@ -752,5 +772,7 @@
     <script src="comms_nav.js"></script>
     <script src="tour.js"></script>
     <script src="main.js"></script>
+    <!-- After main.js on purpose: sound.js observes the game main.js creates (see its header comment). -->
+    <script src="sound.js"></script>
 </body>
 </html>

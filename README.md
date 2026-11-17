@@ -25,6 +25,7 @@ Leave the terminal window open while you play — it's the server that stores yo
 Click **New Game**, name your save, and confirm the sector seed. A guided tour starts on your first game and walks you through the basics; you can replay it at any time with the **Tour** button at the top of the dashboard.
 
 - **Esc** pauses the game and opens the save menu.
+- The **Sounds** button at the top of the dashboard opens the volume controls (overall, buttons, effects, alerts and the systems hum), and can turn sound off.
 - The game also autosaves every five minutes.
 - **Load Game** on the main menu lists your saves.
 
