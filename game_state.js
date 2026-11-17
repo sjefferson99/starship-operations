@@ -32,6 +32,8 @@ class GameState {
                 seed: game.commsSeed ?? null,
                 locations: game.commsLocations ?? [],
                 market: game.market ?? [],
+                // Recent module sales still holding resale prices down (fabrication.js).
+                resale: { ...(game.moduleResale ?? {}) },
             },
 
             // Where the gameplay RNG is in its sequence, so the rolls after a
@@ -87,6 +89,10 @@ class GameState {
                 blackLiquidL: s.blackWater.liquidL, blackSolidL: s.blackWater.solidL, blackCapacityL: s.blackWater.capacity,
                 blackExposureHours: s.blackWater.exposureHours ?? 0,
             },
+            // The rations themselves are in the cargo's food boxes.
+            food: {
+                starvedHours: s.food?.starvedHours ?? 0,
+            },
         };
 
         return {
@@ -107,10 +113,22 @@ class GameState {
         const c = cargo ?? Fabrication.defaultCargo();
         return {
             items: { ...c.items },
-            boxes: (c.boxes ?? []).map(b => ({
-                id: b.id, kind: b.kind ?? null, fillL: b.fillL ?? 0,
-                sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
-            })),
+            boxes: (c.boxes ?? []).map(GameState._box),
+        };
+    }
+
+    // One storage box, normalised. Boxes saved before machine boxes existed
+    // have no `size` (they were all standard) and no `module`.
+    static _box(b) {
+        const m = b.module;
+        return {
+            id: b.id, size: b.size === 'machine' ? 'machine' : 'standard',
+            kind: b.kind ?? null, fillL: b.fillL ?? 0,
+            sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
+            module: m && m.moduleKey ? {
+                moduleKey: m.moduleKey, tier: m.tier ?? 1, repairPct: m.repairPct ?? 100,
+                juryRigged: !!m.juryRigged, destroyed: !!m.destroyed,
+            } : null,
         };
     }
 
@@ -118,11 +136,16 @@ class GameState {
     static _applyCargo(game, saved) {
         const cargo = Fabrication.defaultCargo();
         Object.entries(saved?.items ?? {}).forEach(([key, n]) => { cargo.items[key] = n ?? 0; });
-        cargo.boxes = (saved?.boxes ?? []).map(b => ({
-            id: b.id, kind: b.kind ?? null, fillL: b.fillL ?? 0,
-            sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
-        }));
+        cargo.boxes = (saved?.boxes ?? []).map(GameState._box);
         game.cargo = cargo;
+    }
+
+    // A payload from before food existed has none aboard. Rather than have the
+    // crew start starving on arrival, it gets the box of rations a new ship
+    // starts with.
+    static _hasFoodState(systemState) {
+        const food = systemState?.food;
+        return !!food && food.present !== false && food.starvedHours != null;
     }
 
     static _moduleSnapshot(sys) {
@@ -168,6 +191,7 @@ class GameState {
         game.commsSeed      = world.comms?.seed ?? null;
         game.commsLocations = world.comms?.locations ?? [];
         game.market         = world.comms?.market ?? [];
+        game.moduleResale   = { ...(world.comms?.resale ?? {}) }; // none in payloads from before resale
         game.shipInstanceId = world.shipInstanceId ?? 'player-ship-1';
 
         game.inBreathableAtmosphere = world.environment?.inBreathableAtmosphere ?? false;
@@ -184,6 +208,7 @@ class GameState {
             }
             game.repairQueue = inst?.repairQueue ?? [];
             GameState._applyCargo(game, inst?.cargo);
+            if (!GameState._hasFoodState(inst?.systemState)) game.fabrication.addStarterFood();
         }
     }
 
@@ -236,6 +261,12 @@ class GameState {
         game.systems.blackWater.capacity = water.blackCapacityL ?? 100;
         game.systems.blackWater.level    = (game.systems.blackWater.current / game.systems.blackWater.capacity) * 100;
         game.systems.blackWater.exposureHours = water.blackExposureHours ?? 0;
+
+        game.systems.food.starvedHours = s.food?.starvedHours ?? 0;
+        // Derived from the food boxes by the next tick; cleared so nothing
+        // from the game being left shows meanwhile.
+        game.systems.food.rations  = 0;
+        game.systems.food.daysLeft = Infinity;
 
         GameState._applyModule(game.systems.transceiver, s.transceiver, { active: true, repairPct: 100, installed: true });
         GameState._applyModule(game.systems.waterMaker,  s.waterMaker,  { active: false, repairPct: 100, installed: false });

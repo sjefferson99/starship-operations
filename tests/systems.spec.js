@@ -267,9 +267,10 @@ test.describe('market and water maker', () => {
         // 20 L + this hour's 3.75 L of new liquid waste − 6 L reclaimed
         expect(result.powered.blackLiquid).toBeCloseTo(20 + (100 / 24) * 0.9 - 6, 5);
         expect(result.powered.draw).toBeCloseTo(30, 5);
-        // The dashboard's fill rate is net of reclamation: 4.5 L/hr of new waste − 6 L/hr reclaimed.
-        expect(result.powered.fill).toBeCloseTo((100 / 24) * 0.9 * 1.2 - 6, 5);
-        expect(result.powered.shown).toBe('−1.500 L/hr');
+        // The dashboard's fill rate is net of reclamation: 3.75 L/hr of liquid waste plus the
+        // solids from three rations a day (1.5 L each), − 6 L/hr reclaimed.
+        expect(result.powered.fill).toBeCloseTo((100 / 24) * 0.9 + 4.5 / 24 - 6, 5);
+        expect(result.powered.shown).toBe(`−${(-result.powered.fill).toFixed(3)} L/hr`);
         expect(result.powered.reclaimShown).toBe('−6.000 L/hr');
         expect(result.unpowered).toBe(0);
     });
@@ -297,14 +298,14 @@ test.describe('market and water maker', () => {
         expect(result.out).toBeCloseTo(6, 5);
         expect(result.reclaim).toBeCloseTo(3.75, 5);
         expect(result.liquid).toBeCloseTo(0, 5);
-        expect(result.solid).toBeCloseTo(12 + 0.75, 5); // untouched, and still growing
+        expect(result.solid).toBeCloseTo(12 + 4.5 / 24, 5); // untouched, and still growing from what's eaten
         // Reclaimed share at full power, condensed share at 40%: (3.75 + 2.25 × 0.4) / 6 × 30 W.
         expect(result.draw).toBeCloseTo(23.25, 5);
 
         const note = page.locator('#blackwater-solids-note');
         await expect(note).toBeVisible();
         await expect(note).toContainText('All the liquid has been reclaimed');
-        await expect(note).toContainText('12.8 L is solid matter');
+        await expect(note).toContainText('12.2 L is solid matter');
 
         // Nothing but air to work with (no crew use, no liquid): the whole output is the cheap kind.
         const airOnly = await page.evaluate(() => {

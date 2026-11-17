@@ -1279,6 +1279,11 @@
 .cargo-box-actions .repair-btn { white-space: nowrap; }
 .cargo-box-composting .task-progress-fill { background: #8d6e63; }
 .cargo-box-ready .task-progress-fill { background: #66bb6a; }
+.cargo-box-food .task-progress-fill { background: #ffb74d; }
+.cargo-box-machine .task-progress-fill { background: #4fc3f7; }
+.cargo-box-actions .repair-btn { max-width: 260px; white-space: normal; }
+/* A module listing can be bought to fit or (with a machine box) to store. */
+.market-buttons { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
 .task-card-fabricate .task-title::before { content: '\2692\00a0'; color: #90a4ae; }
 /* The Cargo Hold renders into one wrapper; lay it out like the overlay card itself. */
 #cargo-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; }

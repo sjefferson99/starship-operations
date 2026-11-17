@@ -358,6 +358,38 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Food and machine boxes (fabrication.js): a box has a size, and a machine
+    // box can hold one module. Rations are kept in food boxes (kind 'food'),
+    // so only the starvation clock needs a table of its own.
+    db => {
+        db.exec(`
+            ALTER TABLE storage_boxes ADD COLUMN size TEXT;
+            ALTER TABLE storage_boxes ADD COLUMN module_key TEXT;
+            ALTER TABLE storage_boxes ADD COLUMN module_tier INTEGER;
+            ALTER TABLE storage_boxes ADD COLUMN module_repair_pct REAL;
+            ALTER TABLE storage_boxes ADD COLUMN module_jury_rigged INTEGER;
+            ALTER TABLE storage_boxes ADD COLUMN module_destroyed INTEGER;
+
+            CREATE TABLE IF NOT EXISTS ship_food (
+                save_id INTEGER,
+                ship_id TEXT,
+                starved_hours REAL,
+                PRIMARY KEY (save_id, ship_id)
+            );
+        `);
+    },
+    // Module resale (fabrication.js): recent sales per module type, which
+    // hold the price of the next one down until they wear off.
+    db => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS market_resale (
+                save_id INTEGER,
+                module_key TEXT,
+                recent_sales REAL,
+                PRIMARY KEY (save_id, module_key)
+            );
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -428,7 +460,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['notifications', 'storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['notifications', 'market_resale', 'ship_food', 'storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -457,6 +489,8 @@ function getSave(db, saveId) {
     }));
 
     const marketRows = db.prepare('SELECT * FROM market_listings WHERE save_id = ?').all(saveId);
+    const resale = Object.fromEntries(db.prepare('SELECT * FROM market_resale WHERE save_id = ?').all(saveId)
+        .map(r => [r.module_key, r.recent_sales]));
     const market = marketRows.map(r => ({
         id: r.id, locationId: r.location_id, moduleKey: r.module_key, name: r.name,
         repairPct: r.repair_pct, price: r.price,
@@ -472,7 +506,7 @@ function getSave(db, saveId) {
         savedAt: save.updated_at,
         world: { gameTime: save.game_time, credits: save.credits, gameSpeed: save.game_speed },
         crew: { count: save.crew_count, members: crewMembers },
-        comms: { seed: save.comms_seed, locations: commsLocations, market },
+        comms: { seed: save.comms_seed, locations: commsLocations, market, resale },
         rng: { state: save.rng_state ?? null },
         shipInstanceId: save.ship_instance_id,
         environment: {
@@ -488,6 +522,12 @@ function getSave(db, saveId) {
     return { world, shipInstances };
 }
 
+function _saveMarketResale(db, saveId, resale) {
+    db.prepare('DELETE FROM market_resale WHERE save_id = ?').run(saveId);
+    const insert = db.prepare('INSERT INTO market_resale (save_id, module_key, recent_sales) VALUES (?, ?, ?)');
+    Object.entries(resale).forEach(([key, n]) => { if (n > 0) insert.run(saveId, key, n); });
+}
+
 function _composeShip(db, saveId, shipRow) {
     const atm     = db.prepare('SELECT * FROM ship_atmosphere WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
     const modules = db.prepare('SELECT * FROM ship_modules WHERE save_id = ? AND ship_id = ?').all(saveId, shipRow.id);
@@ -498,6 +538,7 @@ function _composeShip(db, saveId, shipRow) {
     const tasks   = db.prepare('SELECT * FROM repair_tasks WHERE save_id = ? AND ship_id = ? ORDER BY queue_position').all(saveId, shipRow.id);
     const items   = db.prepare('SELECT * FROM ship_cargo_items WHERE save_id = ? AND ship_id = ?').all(saveId, shipRow.id);
     const boxes   = db.prepare('SELECT * FROM storage_boxes WHERE save_id = ? AND ship_id = ? ORDER BY position').all(saveId, shipRow.id);
+    const food    = db.prepare('SELECT * FROM ship_food WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id);
 
     const moduleState = key => {
         const m = byKey[key] ?? {};
@@ -537,6 +578,8 @@ function _composeShip(db, saveId, shipRow) {
                 blackLiquidL: water.black_liquid_l, blackSolidL: water.black_solid_l, blackCapacityL: water.black_capacity_l,
                 blackExposureHours: water.black_exposure_hours,
             },
+            // `present` is false for a save written before food existed (no row).
+            food: { present: !!food, starvedHours: food?.starved_hours ?? null },
         },
         repairQueue: tasks.map(t => t.kind === 'fabricate'
             ? {
@@ -551,8 +594,12 @@ function _composeShip(db, saveId, shipRow) {
         cargo: {
             items: Object.fromEntries(items.map(r => [r.item_key, r.quantity ?? 0])),
             boxes: boxes.map(b => ({
-                id: b.id, kind: b.kind ?? null, fillL: b.fill_l ?? 0,
+                id: b.id, size: b.size ?? 'standard', kind: b.kind ?? null, fillL: b.fill_l ?? 0,
                 sealed: !!b.sealed, compostHours: b.compost_hours ?? 0,
+                module: b.module_key ? {
+                    moduleKey: b.module_key, tier: b.module_tier ?? 1, repairPct: b.module_repair_pct ?? 100,
+                    juryRigged: !!b.module_jury_rigged, destroyed: !!b.module_destroyed,
+                } : null,
             })),
         },
     };
@@ -592,6 +639,7 @@ function _writeSave(db, saveId, { world, shipInstances }) {
         _saveCrewMembers(db, saveId, world?.crew?.members ?? []);
         _saveCommsLocations(db, saveId, world?.comms?.locations ?? []);
         _saveMarketListings(db, saveId, world?.comms?.market ?? []);
+        _saveMarketResale(db, saveId, world?.comms?.resale ?? {});
         _saveNotifications(db, saveId, world?.notifications ?? []);
 }
 
@@ -853,11 +901,24 @@ function _saveOneShip(db, saveId, ship) {
             .run(saveId, ship.id, key, quantity ?? 0);
     });
     (ship.cargo?.boxes ?? []).forEach((box, idx) => {
+        const m = box.module;
         db.prepare(`
-            INSERT INTO storage_boxes (save_id, ship_id, id, position, kind, fill_l, sealed, compost_hours)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(saveId, ship.id, box.id, idx, box.kind ?? null, box.fillL ?? 0, box.sealed ? 1 : 0, box.compostHours ?? 0);
+            INSERT INTO storage_boxes (save_id, ship_id, id, position, kind, fill_l, sealed, compost_hours,
+                size, module_key, module_tier, module_repair_pct, module_jury_rigged, module_destroyed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(saveId, ship.id, box.id, idx, box.kind ?? null, box.fillL ?? 0, box.sealed ? 1 : 0, box.compostHours ?? 0,
+            box.size ?? 'standard', m?.moduleKey ?? null, m ? (m.tier ?? 1) : null, m ? (m.repairPct ?? 100) : null,
+            m ? (m.juryRigged ? 1 : 0) : null, m ? (m.destroyed ? 1 : 0) : null);
     });
+
+    // A payload from before food existed carries no food state: write no row,
+    // so loading it still reads as "no food state" and gets starter rations.
+    db.prepare('DELETE FROM ship_food WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
+    const food = s.food;
+    if (food && food.present !== false && food.starvedHours != null) {
+        db.prepare('INSERT INTO ship_food (save_id, ship_id, starved_hours) VALUES (?, ?, ?)')
+            .run(saveId, ship.id, food.starvedHours);
+    }
 }
 
 module.exports = {

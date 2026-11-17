@@ -53,16 +53,27 @@ class RepairManager {
         return modules && modules[moduleType] && modules[moduleType][String(tier)];
     }
 
-    // Map a system key used in game.systems / ship_instances.json system blocks
-    // to the module type used in module_specs.json.
+    // Every function here that takes a `systemKey` takes a UNIT KEY: either a
+    // fitted module's key in game.systems ('o2', 'waterMaker', …) or
+    // 'box:<boxId>' for a module stored in a machine box (fabrication.js).
+    // Repair tasks carry the unit key as their `systemKey`, so a stored unit's
+    // repair is worked like any other — and the dashboard, which only ever
+    // looks for fitted keys, never mistakes it for the fitted module's.
+    isStoredUnit(systemKey) {
+        return typeof systemKey === 'string' && systemKey.startsWith('box:');
+    }
+
+    // Map a unit key to the module type used in module_specs.json.
     _moduleType(systemKey) {
-        if (systemKey === 'o2')    return 'o2Generator';
-        if (systemKey === 'co2')   return 'co2Scrubber';
-        if (systemKey === 'power') return 'generator';
-        return systemKey;
+        const key = this.isStoredUnit(systemKey) ? this._sys(systemKey)?.moduleKey : systemKey;
+        if (key === 'o2')    return 'o2Generator';
+        if (key === 'co2')   return 'co2Scrubber';
+        if (key === 'power') return 'generator';
+        return key;
     }
 
     _sys(systemKey) {
+        if (this.isStoredUnit(systemKey)) return this.game.fabrication.storedModule(systemKey.slice(4));
         return this.game.systems[systemKey];
     }
 
@@ -80,6 +91,12 @@ class RepairManager {
             const sys = this._sys(key);
             return sys && sys.installed !== false;
         });
+    }
+
+    // Unit keys of modules stored in machine boxes. They can be repaired but,
+    // switched off in a box, never wear — so decay() doesn't see them.
+    storedKeys() {
+        return this.game.fabrication.storedUnitKeys();
     }
 
     // ── Stages ──────────────────────────────────────────────────────────────

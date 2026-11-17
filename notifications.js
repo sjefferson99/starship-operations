@@ -27,6 +27,7 @@ class Notifications {
         this.STATUS_LABELS = {
             o2: 'Oxygen', co2: 'CO₂', power: 'Battery', fuel: 'Fuel', freshWater: 'Fresh water',
             blackWater: 'Black water', transceiver: 'Transceiver', waterMaker: 'Water maker',
+            food: 'Food',
         };
         this.MODULE_LABELS = {
             o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator',
@@ -114,7 +115,11 @@ class Notifications {
             const sys = s[key];
             if (sys) modules[key] = { pct: sys.repairPct ?? 100, destroyed: !!sys.destroyed, installed: sys.installed !== false };
         });
-        const boxes = (g.cargo?.boxes ?? []).map(b => ({ id: b.id, sealed: !!b.sealed, ready: fab.boxStatus(b) === 'ready', fillL: b.fillL ?? 0 }));
+        const boxes = (g.cargo?.boxes ?? []).map(b => ({
+            id: b.id, label: fab.boxLabel(b), machine: fab.isMachineBox(b),
+            sealed: !!b.sealed, ready: fab.boxStatus(b) === 'ready', fillL: b.fillL ?? 0,
+            module: b.module ? { key: b.module.moduleKey, pct: b.module.repairPct ?? 100, destroyed: !!b.module.destroyed } : null,
+        }));
         return {
             saveId: g.saveId,
             statuses: Object.fromEntries(Object.keys(this.STATUS_LABELS).map(key =>
@@ -124,6 +129,8 @@ class Notifications {
             market: (g.market ?? []).map(l => ({ id: l.id, name: l.name, repairPct: l.repairPct })),
             supplies: { ...(g.cargo?.items ?? {}) },
             boxes,
+            food: fab.rationsAboard(),
+            swaps: fab.swapCount,
             blackWater: s.blackWater.current,
             credits: g.credits,
         };
@@ -142,6 +149,10 @@ class Notifications {
             case 'blackWater':  return `Waste tank ${r(s.level)}% full.`;
             case 'transceiver': return 'Out of range of the local network.';
             case 'waterMaker':  return 'Below 50% condition.';
+            case 'food': {
+                const left = this.game.fabrication.rationsAboard();
+                return left > 0 ? `${left.toFixed(1)} rations left.` : 'No food aboard. Buy rations on the market.';
+            }
             default:            return '';
         }
     }
@@ -188,13 +199,31 @@ class Notifications {
         // Market purchase: a listing gone and credits spent. Buying a module fits it,
         // so that is one entry rather than "bought" and "fitted".
         const bought = spent > 0 ? prev.market.filter(l => !now.market.some(n => n.id === l.id)) : [];
+        const storedIn = now.boxes.find(b => b.module && !prev.boxes.find(p => p.id === b.id)?.module);
         bought.forEach(l => {
-            const condition = l.repairPct != null ? ` Fitted in ${Math.round(l.repairPct)}% condition.` : '';
-            this.add({ level: 'info', title: `Bought ${l.name}`, detail: `${spent} credits.${condition}` });
+            const pct = l.repairPct != null ? ` in ${Math.round(l.repairPct)}% condition` : '';
+            const where = storedIn ? ` Stored in ${storedIn.label}${pct}.` : (pct ? ` Fitted${pct}.` : '');
+            this.add({ level: 'info', title: `Bought ${l.name}`, detail: `${spent} credits.${where}` });
         });
 
+        // A stored module swapped with the fitted one: one entry, and the
+        // fitted module's change of condition isn't a repair.
+        const swapped = now.swaps !== prev.swaps;
+        if (swapped) {
+            const box = now.boxes.find(b => {
+                const before = prev.boxes.find(p => p.id === b.id);
+                return before?.module && (!b.module || b.module.pct !== before.module.pct || b.module.destroyed !== before.module.destroyed);
+            });
+            const before = box && prev.boxes.find(p => p.id === box.id);
+            const name = before ? (this.MODULE_LABELS[before.module.key] ?? before.module.key) : 'Module';
+            this.add({
+                level: 'info', title: `${name} fitted from ${box?.label ?? 'a machine box'}`,
+                detail: box?.module ? `The unit it replaced is now in ${box.label}.` : 'The machine box is empty again.',
+            });
+        }
+
         // Modules: replaced, destroyed, or a repair stage landing.
-        Object.entries(now.modules).forEach(([key, mod]) => {
+        if (!swapped) Object.entries(now.modules).forEach(([key, mod]) => {
             const before = prev.modules[key];
             if (!before) return;
             const name = this.MODULE_LABELS[key] ?? key;
@@ -214,27 +243,47 @@ class Notifications {
             const bought = Object.entries(now.supplies)
                 .map(([item, n]) => ({ item, n: n - (prev.supplies[item] ?? 0) }))
                 .filter(x => x.n > 0);
+            const rations = now.food - prev.food;
+            if (rations > 0.5) bought.push({ item: 'food', n: Math.round(rations) });
             if (bought.length) {
-                const names = bought.map(({ item, n }) => `${n} × ${g.fabrication.ITEMS?.[item]?.name ?? item}`).join(', ');
+                const nameOf = item => (item === 'food' ? g.fabrication.FOOD.name : g.fabrication.ITEMS?.[item]?.name ?? item);
+                const names = bought.map(({ item, n }) => `${n} × ${nameOf(item)}`).join(', ');
                 this.add({ level: 'info', title: 'Supplies bought', detail: `${names} — ${spent} credits.` });
             }
         }
 
         // Storage boxes: made, sealed, ready, sold.
         const newBoxes = now.boxes.filter(b => !prev.boxes.some(p => p.id === b.id));
-        if (newBoxes.length) {
+        if (newBoxes.some(b => !b.machine)) {
             this.add({ key: 'fab:storageBox', level: 'good', title: 'Storage box fabricated', detail: 'It is in the Cargo Hold.' });
         }
-        now.boxes.forEach((b, i) => {
+        if (newBoxes.some(b => b.machine)) {
+            this.add({ key: 'fab:machineBox', level: 'good', title: 'Machine storage box fabricated', detail: 'It is in the Cargo Hold, ready to take a module.' });
+        }
+        now.boxes.forEach(b => {
             const before = prev.boxes.find(p => p.id === b.id);
             if (!before) return;
             if (b.sealed && !before.sealed) {
-                this.add({ level: 'info', title: `Storage Box ${i + 1} sealed`, detail: `Composting ${Math.round(b.fillL)} L of solid waste.` });
+                this.add({ level: 'info', title: `${b.label} sealed`, detail: `Composting ${Math.round(b.fillL)} L of solid waste.` });
             }
             if (b.ready && !before.ready) {
-                this.add({ level: 'good', title: `Compost ready in Storage Box ${i + 1}`, detail: 'Sell it on a planet with the local network in range.' });
+                this.add({ level: 'good', title: `Compost ready in ${b.label}`, detail: 'Sell it on a planet with the local network in range.' });
+            }
+            // A stored module: repaired, wrecked by a failed repair, or sold.
+            if (swapped || !b.module || !before.module) return;
+            const name = this.MODULE_LABELS[b.module.key] ?? b.module.key;
+            if (b.module.destroyed && !before.module.destroyed) {
+                this.add({ key: `stored:${b.id}`, level: 'warning', title: `Stored ${name} destroyed`, detail: `The repair failed. It is only worth scrap now.` });
+            } else if (b.module.pct - before.module.pct >= 5) {
+                this.add({ key: `stored:${b.id}`, level: 'good', title: `Stored ${name} repaired to ${Math.round(b.module.pct)}%`, detail: b.label });
             }
         });
+        if (!swapped && earned > 0) {
+            prev.boxes.filter(p => p.module && !now.boxes.find(b => b.id === p.id)?.module).forEach(p => {
+                const name = this.MODULE_LABELS[p.module.key] ?? p.module.key;
+                this.add({ level: 'good', title: `Sold ${name}`, detail: `+${earned} credits.` });
+            });
+        }
         const sold = prev.boxes.filter(p => p.ready && !now.boxes.some(b => b.id === p.id && b.ready)).length;
         if (sold > 0 && earned > 0) {
             this.add({ level: 'good', title: 'Compost sold', detail: `+${earned} credits.` });

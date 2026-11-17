@@ -54,7 +54,7 @@ class SoundManager {
         this.HUM_GENERATOR   = 0.5;
         this.HUM_PER_SYSTEM  = 0.17;
         this.POWERED_KEYS    = ['o2', 'co2', 'transceiver', 'waterMaker'];
-        this.STATUS_KEYS     = ['o2', 'co2', 'power', 'fuel', 'freshWater', 'blackWater', 'transceiver', 'waterMaker'];
+        this.STATUS_KEYS     = ['o2', 'co2', 'power', 'fuel', 'freshWater', 'food', 'blackWater', 'transceiver', 'waterMaker'];
 
         this.log   = [];    // names of the most recent sounds — for tests and debugging
         this._mix  = 1;     // loudness of the channel currently being scheduled (set in play())
@@ -429,6 +429,10 @@ class SoundManager {
         this.POWERED_KEYS.concat('power').forEach(key => {
             if (s[key] && s[key].installed !== false) modules[key] = { pct: s[key].repairPct ?? 100, destroyed: !!s[key].destroyed };
         });
+        // Modules stored in machine boxes are repaired too.
+        (g.cargo?.boxes ?? []).forEach(b => {
+            if (b.module) modules[`box:${b.id}`] = { pct: b.module.repairPct ?? 100, destroyed: !!b.module.destroyed };
+        });
         return {
             saveId: g.saveId,
             // Per-system ranks, so one thing getting worse is heard even while another is already bad.
@@ -439,6 +443,9 @@ class SoundManager {
             blackWater: s.blackWater.current,
             stock: (g.market || []).length,
             supplies: Object.values(g.cargo?.items ?? {}).reduce((a, n) => a + n, 0),
+            food: g.fabrication.rationsAboard(),
+            stored: (g.cargo?.boxes ?? []).filter(b => b.module).length,
+            swaps: g.fabrication.swapCount,
             boxes: (g.cargo?.boxes ?? []).length,
             readyBoxes: (g.cargo?.boxes ?? []).filter(b => b.sealed && g.fabrication.boxStatus(b) === 'ready').length,
             // Infections leave no state of their own; the Notifications list is where they show.
@@ -477,9 +484,10 @@ class SoundManager {
 
         // Modules: a jump up in repair level is a finished repair; a new `destroyed` is a failed one.
         let repaired = false, destroyed = false;
+        const swapped = now.swaps !== prev.swaps; // a swap changes the fitted module's condition, but isn't a repair
         Object.entries(now.modules).forEach(([key, mod]) => {
             const before = prev.modules[key];
-            if (!before) return;
+            if (!before || swapped) return;
             if (mod.destroyed && !before.destroyed) destroyed = true;
             else if (mod.pct - before.pct >= 5 && now.stock === prev.stock) repaired = true;
         });
@@ -492,6 +500,9 @@ class SoundManager {
         if (now.ventsOpen !== prev.ventsOpen) this.play(now.ventsOpen ? 'ventOpen' : 'ventClose');
         if (now.stock < prev.stock && now.credits < prev.credits) this.play('purchase');
         if (now.supplies > prev.supplies && now.credits < prev.credits) this.play('purchase');
+        if (now.food - prev.food > 0.5 && now.credits < prev.credits) this.play('purchase');
+        if (now.stored < prev.stored && now.credits > prev.credits && !swapped) this.play('sale');
+        if (swapped) this.play('repaired');
         if (now.boxes > prev.boxes) this.play('repaired'); // a fabrication job finished
         if (now.readyBoxes < prev.readyBoxes && now.credits > prev.credits) this.play('sale');
         if (now.readyBoxes > prev.readyBoxes) this.play('ready');
