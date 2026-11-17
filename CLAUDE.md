@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `rng.js` → `game_state.js` → `system_update.js` →
-`repair_manager.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `main.js` → `sound.js`. That order is load-bearing —
+`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -36,8 +36,8 @@ changing state shape, grep for every reader, don't assume one file owns a field.
 **The tick loop is the heart of the simulation** (`main.js`'s `_startTimer`): every real second,
 if not paused, `gameTime` advances by `gameSpeed` (1/10/100/1000×) and that same value is passed
 as `dt` (game-seconds elapsed) into `SystemUpdate.update(dt)`, which runs O2 → CO2 →
-transceiver → water (incl. water maker) → power/fuel → crew health → repair decay → repair-queue
-processing → status thresholds, in that fixed order (preceded by the power-budget calculation
+transceiver → water (incl. water maker) → power/fuel → crew health → repair decay → work-queue
+processing → composting → status thresholds, in that fixed order (preceded by the power-budget calculation
 described below), then `main.js` does a full imperative DOM re-render (no diffing). Because `dt` can be
 as large as 1000 at high speed, any new per-tick calculation needs to be safe against one huge
 step — see the CO2-vent-overshoot fix in `system_update.js` for the pattern (clamp to the
@@ -106,6 +106,20 @@ to that stage's `toPct` only when the stage completes, and the task then continu
 stage until `task.targetPct` is reached. `task.band`/`totalHours`/`hoursRemaining` describe the
 stage currently being worked, not the whole job (`remainingHours(task)` gives that). The target is
 chosen with the "Repair to" chips (card, Available Repairs, or on a queued task) and defaults to 100.
+
+**Fabrication and cargo live in `fabrication.js`** (`Fabrication`). `game.cargo` holds supplies
+aboard (`items`: `basicComponents`, `compostingAgent`, bought on any planet you can trade at — unlimited
+stock, defined in `Fabrication.ITEMS`) and storage boxes (`boxes`). The repair queue is the ship's
+**work queue**: fabrication jobs are tasks in `game.repairQueue` with `kind: 'fabricate'` and a
+`recipeKey` (no `systemKey`), worked by the same engineers in the same order; components are taken when
+the job is queued and refunded on cancel, and `RepairManager.processQueue` calls
+`Fabrication.completeTask` when the hours are done. Anything reading `repairQueue` must allow for tasks
+without a `systemKey`. A box holds one kind of thing at a time: composting agent makes an empty box a
+compost box, solid waste (`blackWater.solidL`) is moved into it instantly, sealing (by hand or once full)
+starts `COMPOST_HOURS` of composting, and finished compost sells on a planet, which empties the box.
+Boxes, supplies and boxes being made count toward `_computeShipCapacity()`, and buying or fabricating is
+refused when it wouldn't fit (`Fabrication.spaceBlocker`). Persisted in `ship_cargo_items` and
+`storage_boxes`; `repair_tasks` gained `kind`/`recipe_key`.
 
 **Crew health lives in `crew_manager.js`** (`CrewManager`), separate from `data/crew_manifest.json`
 (the static, read-only template of `{id, classes, shifts}`). `this.crewManifest` on `StarshipGame`

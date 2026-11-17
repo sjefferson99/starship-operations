@@ -88,7 +88,8 @@
                     <!-- Comms & Nav is opened from the Transceiver card, not from here. -->
                     <div class="header-actions">
                         <span id="save-status" class="save-status"></span>
-                        <button id="repair-queue-btn" class="repair-queue-btn">Repair Queue</button>
+                        <button id="repair-queue-btn" class="repair-queue-btn">Work Queue</button>
+                        <button id="cargo-btn" class="repair-queue-btn">Cargo Hold</button>
                         <button id="ship-capacity-btn" class="repair-queue-btn">Ship Capacity</button>
                     </div>
                 </div>
@@ -465,6 +466,10 @@
                         <span id="blackwater-status">Tank: <strong>0%</strong> full</span>
                         <button id="blackwater-dump-btn" class="toggle-btn btn-off">Dump to Space</button>
                     </div>
+                    <div class="system-controls">
+                        <span>Solid matter</span>
+                        <button id="blackwater-transfer-btn" class="toggle-btn btn-off" disabled>Move to Compost Box</button>
+                    </div>
                     <div class="system-info">
                         <span>Each dump is fined <span id="blackwater-fine">100</span> credits. A full tank makes the crew ill.</span>
                     </div>
@@ -610,7 +615,7 @@
     <div id="task-queue-screen" class="overlay-screen" style="display: none;">
         <div class="overlay-card">
             <div class="overlay-header">
-                <h2>Repair Task Queue</h2>
+                <h2>Work Queue</h2>
                 <button id="task-queue-close-btn" class="overlay-close-btn">&times;</button>
             </div>
             <p class="repair-crew-status" id="repair-crew-status">Engineering on duty: 0/0</p>
@@ -620,9 +625,12 @@
                 <li class="task-empty">No repairs currently needed.</li>
             </ul>
 
+            <h3 class="overlay-section-title">Fabrication</h3>
+            <ul id="fabrication-list" class="overlay-list"></ul>
+
             <h3 class="overlay-section-title">Queue</h3>
             <ul id="repair-queue-list" class="overlay-list">
-                <li class="task-empty">No repair tasks queued.</li>
+                <li class="task-empty">Nothing queued.</li>
             </ul>
         </div>
     </div>
@@ -749,6 +757,16 @@
         </div>
     </div>
 
+    <div id="cargo-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <h2>Cargo Hold</h2>
+                <button id="cargo-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+            <div id="cargo-body"></div>
+        </div>
+    </div>
+
     <!-- Sound settings (sound.js builds the slider rows and owns all of this) -->
     <div id="sound-screen" class="overlay-screen" style="display: none;">
         <div class="overlay-card">
@@ -789,6 +807,7 @@
     <script src="game_state.js"></script>
     <script src="system_update.js"></script>
     <script src="repair_manager.js"></script>
+    <script src="fabrication.js"></script>
     <script src="crew_manager.js"></script>
     <script src="comms_nav.js"></script>
     <script src="tour.js"></script>

@@ -53,7 +53,7 @@ test.describe('guided tour', () => {
         await page.click('#transceiver-repair-btn');
         expect(await page.evaluate(() => window.game.repairQueue[0].targetPct)).toBe(50);
 
-        await expect(title).toHaveText('The Repair Queue');
+        await expect(title).toHaveText('The Work Queue');
         await page.click('#repair-queue-btn');
 
         await expect(title).toHaveText('Queue the generator next');
