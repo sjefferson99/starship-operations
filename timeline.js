@@ -7,7 +7,11 @@
 //     main.js asks for;
 //   - the Timeline screen (#timeline-screen, opened from the pause menu): the
 //     tree drawn as inline SVG, one row per branch, and a "Go back to here"
-//     button for the selected checkpoint.
+//     button for the selected checkpoint. A long game is rolled up so the
+//     screen stays small: months of 4 weeks, weeks of 7 days, then the
+//     individual checkpoints of one day. Each roll-up dot is one branch's
+//     checkpoints in that period; clicking it drills in, and the breadcrumb
+//     climbs back out. Any checkpoint is a few clicks away.
 //
 // Going back never loses anything. The server keeps the state being left as a
 // 'branch-end', and play after going back grows a new branch under the
@@ -25,6 +29,15 @@ class Timeline {
         this.PAD_X  = 22;
         this.PAD_Y  = 30;  // room for the day labels above the first row
 
+        // Roll-up periods, coarsest first. A month is 4 weeks so they nest exactly.
+        this.DAY_S = 86400;
+        this.UNITS = {
+            month: { seconds: 28 * 86400, child: 'week', label: 'Month', short: 'M' },
+            week:  { seconds: 7 * 86400,  child: 'day',  label: 'Week',  short: 'W' },
+            day:   { seconds: 86400,      child: null,   label: 'Day',   short: 'D' },
+        };
+        this.SHOW_ALL_UP_TO_S = 2 * 86400; // a game this short shows every checkpoint at once
+
         this.KIND_LABELS = {
             'start':      'Start of the game',
             'hourly':     'Automatic checkpoint',
@@ -38,14 +51,29 @@ class Timeline {
         this.detailsEl   = document.getElementById('timeline-details');
         this._tree       = null;  // last { headId, checkpoints } from the server
         this._selectedId = null;
+        this._path       = [];    // drill-down: [{ unit, start }], outermost first
         this._lastHour   = 0;     // last game hour a checkpoint was taken (or skipped) for
         this._busy       = false; // a checkpoint request is in flight
 
         document.getElementById('timeline-close-btn').addEventListener('click', () => this.close());
         this.treeEl.addEventListener('click', e => {
+            const bucket = e.target.closest('[data-bucket-unit]');
+            if (bucket) {
+                this._path.push({ unit: bucket.dataset.bucketUnit, start: Number(bucket.dataset.bucketStart) });
+                this._render();
+                return;
+            }
             const node = e.target.closest('[data-checkpoint-id]');
             if (!node) return;
             this._selectedId = node.dataset.checkpointId;
+            this._render();
+        });
+        this.crumbsEl = document.getElementById('timeline-crumbs');
+        this.crumbsEl.addEventListener('click', e => {
+            const crumb = e.target.closest('[data-crumb]');
+            if (!crumb) return;
+            if (crumb.dataset.crumb === 'now') this._path = this._pathTo(this.game.gameTime);
+            else this._path = this._path.slice(0, Number(crumb.dataset.crumb));
             this._render();
         });
         this.detailsEl.addEventListener('click', e => {
@@ -106,6 +134,7 @@ class Timeline {
         if (this.game.saveId == null) return;
         this._selectedId = null;
         this._tree = null;
+        this._path = [];
         Overlay.show(this.screen);
         this.treeEl.innerHTML = '<p class="task-empty">Loading…</p>';
         this.detailsEl.innerHTML = '';
@@ -189,6 +218,46 @@ class Timeline {
         return { cols: times.length, rows: nextRow, byId };
     }
 
+    // ── Roll-up ─────────────────────────────────────────────────────────────
+
+    // The roll-up unit the whole timeline starts at, from how long it is.
+    _topUnit(nodes) {
+        const span = Math.max(0, ...nodes.map(n => n.gameTime));
+        if (span < this.SHOW_ALL_UP_TO_S) return null;   // every checkpoint, no roll-up
+        if (span < 14 * this.DAY_S) return 'day';
+        if (span < 2 * this.UNITS.month.seconds) return 'week';
+        return 'month';
+    }
+
+    // What the screen shows for the current path: a time window, and the
+    // unit its dots stand for (null = individual checkpoints).
+    _view(nodes) {
+        if (!this._path.length) return { from: -Infinity, to: Infinity, unit: this._topUnit(nodes) };
+        const { unit, start } = this._path[this._path.length - 1];
+        return { from: start, to: start + this.UNITS[unit].seconds, unit: this.UNITS[unit].child };
+    }
+
+    // The drill-down path that ends on the day containing `gameTime`.
+    _pathTo(gameTime) {
+        const path = [];
+        let unit = this._tree ? this._topUnit(this._nodes()) : null;
+        while (unit) {
+            const size = this.UNITS[unit].seconds;
+            path.push({ unit, start: Math.floor(gameTime / size) * size });
+            unit = this.UNITS[unit].child;
+        }
+        return path;
+    }
+
+    _periodName(unit, start) {
+        const u = this.UNITS[unit];
+        const index = Math.floor(start / u.seconds) + 1;
+        if (unit === 'day') return `Day ${index}`;
+        const firstDay = Math.floor(start / this.DAY_S) + 1;
+        const lastDay  = firstDay + u.seconds / this.DAY_S - 1;
+        return `${u.label} ${index} (days ${firstDay}–${lastDay})`;
+    }
+
     // ── Rendering ───────────────────────────────────────────────────────────
 
     _formatTime(gameTime) {
@@ -199,53 +268,129 @@ class Timeline {
         return `Day ${day}, ${hh}:${mm}`;
     }
 
+    // "All time › Week 2 › Day 9", each step clickable to climb back out,
+    // plus a shortcut straight down to today.
+    _renderCrumbs(nodes) {
+        if (!this._topUnit(nodes)) { this.crumbsEl.innerHTML = ''; return; }
+        const parts = [`<button class="timeline-crumb" data-crumb="0"${this._path.length ? '' : ' disabled'}>All time</button>`];
+        this._path.forEach((p, i) => {
+            const last = i === this._path.length - 1;
+            parts.push(`<span class="timeline-crumb-sep">›</span><button class="timeline-crumb" data-crumb="${i + 1}"${last ? ' disabled' : ''}>${this._periodName(p.unit, p.start)}</button>`);
+        });
+        this.crumbsEl.innerHTML = `<div class="timeline-crumb-trail">${parts.join('')}</div>
+            <button class="timeline-crumb timeline-crumb-now" data-crumb="now">Today</button>`;
+    }
+
     _render() {
         if (!this._tree) return;
         const nodes = this._nodes();
-        const { cols, rows, byId } = this._layout(nodes);
-        const x = n => this.PAD_X + n.col * this.COL_W;
-        const y = n => this.PAD_Y + n.row * this.ROW_H;
-        const width  = this.PAD_X * 2 + Math.max(0, cols - 1) * this.COL_W;
-        const height = this.PAD_Y + Math.max(0, rows - 1) * this.ROW_H + 20;
+        const { byId } = this._layout(nodes); // rows come from the whole tree, so branches keep their order
+        const view = this._view(nodes);
+        const inView = n => n.gameTime >= view.from && n.gameTime < view.to;
+        this._renderCrumbs(nodes);
 
-        // Links: along the parent's row to the child's column, or, for a new
-        // branch, down from the parent first.
-        const links = nodes.filter(n => byId.has(n.parentId)).map(n => {
-            const p = byId.get(n.parentId);
-            const d = p.row === n.row
-                ? `M ${x(p)} ${y(p)} L ${x(n)} ${y(n)}`
-                : `M ${x(p)} ${y(p)} L ${x(p)} ${y(n) - 8} Q ${x(p)} ${y(n)} ${x(p) + 8} ${y(n)} L ${x(n)} ${y(n)}`;
-            return `<path class="timeline-link${n.kind === 'live' ? ' timeline-link-live' : ''}" d="${d}"/>`;
-        }).join('');
-
-        // A day label above the first column of each game day.
-        const firstOfDay = new Map();
-        nodes.forEach(n => {
-            const day = Math.floor(n.gameTime / 86400) + 1;
-            if (!firstOfDay.has(day) || n.col < firstOfDay.get(day)) firstOfDay.set(day, n.col);
+        // Dots: single checkpoints, or each branch's checkpoints in one period.
+        const size  = view.unit ? this.UNITS[view.unit].seconds : null;
+        const keyOf = n => view.unit ? `${n.row}:${Math.floor(n.gameTime / size)}` : n.id;
+        const dots  = new Map();
+        nodes.filter(inView).forEach(n => {
+            const key = keyOf(n);
+            if (!dots.has(key)) dots.set(key, {
+                key, row: n.row, nodes: [],
+                time: view.unit ? Math.floor(n.gameTime / size) * size : n.gameTime,
+            });
+            dots.get(key).nodes.push(n);
         });
-        const dayLabels = [...firstOfDay].map(([day, col]) =>
-            `<text class="timeline-day" x="${this.PAD_X + col * this.COL_W}" y="12">D${day}</text>`).join('');
 
-        const dots = nodes.map(n => {
-            const classes = ['timeline-node', `timeline-node-${n.kind}`];
-            if (n.here) classes.push('timeline-node-here');
-            if (n.id === this._selectedId) classes.push('timeline-node-selected');
-            const r = n.kind === 'hourly' ? 5 : 7;
-            const ring = n.here ? `<circle class="timeline-here-ring" cx="${x(n)}" cy="${y(n)}" r="${r + 5}"/>` : '';
-            return `${ring}<circle class="${classes.join(' ')}" data-checkpoint-id="${n.id}" cx="${x(n)}" cy="${y(n)}" r="${r}">
-                        <title>${this._formatTime(n.gameTime)} — ${this.KIND_LABELS[n.kind] ?? n.kind}</title>
-                    </circle>`;
-        }).join('');
+        // Columns: one per distinct time (or period); rows: only the branches seen here.
+        const all   = [...dots.values()];
+        const times = [...new Set(all.map(d => d.time))].sort((a, b) => a - b);
+        const colOf = new Map(times.map((t, i) => [t, i]));
+        const rows  = [...new Set(all.map(d => d.row))].sort((a, b) => a - b);
+        const rowOf = new Map(rows.map((r, i) => [r, i]));
+        all.forEach(d => { d.col = colOf.get(d.time); d.r = rowOf.get(d.row); });
 
+        const colW   = view.unit ? this.COL_W + 14 : this.COL_W;
+        const x      = d => this.PAD_X + d.col * colW;
+        const y      = d => this.PAD_Y + d.r * this.ROW_H;
+        const width  = this.PAD_X * 2 + Math.max(0, times.length - 1) * colW;
+        const height = this.PAD_Y + Math.max(0, rows.length - 1) * this.ROW_H + 20;
+
+        // Links between dots, plus short stubs for a line that carries on past
+        // the edge of the window (its parent before it, or its child after it).
+        const links = new Map();
+        const path  = (from, to) => from.r === to.r
+            ? `M ${x(from)} ${y(from)} L ${x(to)} ${y(to)}`
+            : `M ${x(from)} ${y(from)} L ${x(from)} ${y(to) - 8} Q ${x(from)} ${y(to)} ${x(from) + 8} ${y(to)} L ${x(to)} ${y(to)}`;
+        nodes.forEach(n => {
+            const p = byId.get(n.parentId);
+            if (!p) return;
+            const cls = `timeline-link${n.kind === 'live' ? ' timeline-link-live' : ''}`;
+            const dn = dots.get(keyOf(n)), dp = dots.get(keyOf(p));
+            if (inView(n) && inView(p)) {
+                if (dn !== dp) links.set(`${dp.key}>${dn.key}`, `<path class="${cls}" d="${path(dp, dn)}"/>`);
+            } else if (inView(n)) {
+                links.set(`<${dn.key}`, `<path class="${cls}" d="M 4 ${y(dn)} L ${x(dn)} ${y(dn)}"/>`);
+            } else if (inView(p)) {
+                links.set(`${dp.key}>`, `<path class="${cls}" d="M ${x(dp)} ${y(dp)} L ${width - 4} ${y(dp)}"/>`);
+            }
+        });
+
+        // Column labels: each roll-up column's period, or the day above the
+        // first checkpoint of each day.
+        const labels = [];
+        if (view.unit) {
+            times.forEach(t => labels.push(
+                `<text class="timeline-day" x="${this.PAD_X + colOf.get(t) * colW}" y="12">${this.UNITS[view.unit].short}${Math.floor(t / size) + 1}</text>`));
+        } else {
+            const firstOfDay = new Map();
+            times.forEach(t => {
+                const day = Math.floor(t / this.DAY_S) + 1;
+                if (!firstOfDay.has(day)) firstOfDay.set(day, colOf.get(t));
+            });
+            firstOfDay.forEach((col, day) => labels.push(`<text class="timeline-day" x="${this.PAD_X + col * colW}" y="12">D${day}</text>`));
+        }
+
+        const marks = all.map(d => view.unit ? this._bucketMark(d, x(d), y(d), view.unit) : this._nodeMark(d.nodes[0], x(d), y(d))).join('');
         this.treeEl.innerHTML =
-            `<svg class="timeline-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${dayLabels}${links}${dots}</svg>`;
-        this._renderDetails(byId.get(this._selectedId) ?? null);
+            `<svg class="timeline-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${labels.join('')}${[...links.values()].join('')}${marks}</svg>`;
+        this._renderDetails(byId.get(this._selectedId) ?? null, !!view.unit);
     }
 
-    _renderDetails(node) {
+    _nodeMark(n, cx, cy) {
+        const classes = ['timeline-node', `timeline-node-${n.kind}`];
+        if (n.here) classes.push('timeline-node-here');
+        if (n.id === this._selectedId) classes.push('timeline-node-selected');
+        const r = n.kind === 'hourly' ? 5 : 7;
+        const ring = n.here ? `<circle class="timeline-here-ring" cx="${cx}" cy="${cy}" r="${r + 5}"/>` : '';
+        return `${ring}<circle class="${classes.join(' ')}" data-checkpoint-id="${n.id}" cx="${cx}" cy="${cy}" r="${r}">
+                    <title>${this._formatTime(n.gameTime)} — ${this.KIND_LABELS[n.kind] ?? n.kind}</title>
+                </circle>`;
+    }
+
+    // One branch's checkpoints in one period: a bigger dot showing how many,
+    // which drills into that period when clicked.
+    _bucketMark(d, cx, cy, unit) {
+        const here     = d.nodes.some(n => n.here);
+        const selected = d.nodes.some(n => n.id === this._selectedId);
+        const classes  = ['timeline-bucket'];
+        if (here) classes.push('timeline-bucket-here');
+        if (selected) classes.push('timeline-bucket-selected');
+        const count = d.nodes.filter(n => n.kind !== 'live').length;
+        const ring  = here ? `<circle class="timeline-here-ring" cx="${cx}" cy="${cy}" r="16"/>` : '';
+        const title = `${this._periodName(unit, d.time)}: ${count} checkpoint${count === 1 ? '' : 's'}${here ? ', and now' : ''}. Click to open.`;
+        return `${ring}<g class="${classes.join(' ')}" data-bucket-unit="${unit}" data-bucket-start="${d.time}">
+                    <circle cx="${cx}" cy="${cy}" r="11"/>
+                    <text x="${cx}" y="${cy + 3.5}">${count || 'now'}</text>
+                    <title>${title}</title>
+                </g>`;
+    }
+
+    _renderDetails(node, rolledUp = false) {
         if (!node) {
-            this.detailsEl.innerHTML = '<p class="task-empty">Select a point on the timeline to go back to it.</p>';
+            this.detailsEl.innerHTML = rolledUp
+                ? '<p class="task-empty">Each dot is a stretch of time on one branch, with how many checkpoints it holds. Click one to open it, down to the checkpoints of a single day.</p>'
+                : '<p class="task-empty">Select a point on the timeline to go back to it.</p>';
             return;
         }
         const crew = node.crewCount ?? 0;

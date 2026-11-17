@@ -71,6 +71,7 @@
       "1": {
         "powerDrawW": 30,
         "atmospherePowerFactor": 0.4,
+        "reclaimYield": 0.9,
         "outputLhr": 6.0,
         "massKg": 24,
         "volumeM3": 0.2,

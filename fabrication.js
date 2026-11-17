@@ -52,12 +52,11 @@ class Fabrication {
         };
 
         // Food is sold by the case and lives in storage boxes, not loose in `items`.
-        // One ration is one meal; each crew member eats RATIONS_PER_CREW_DAY.
+        // One ration is one meal; meal times are SystemUpdate.MEAL_HOURS.
         this.FOOD = {
             name: 'Food Rations', caseSize: 10, price: 30, massKgPerRation: 1,
             blurb: 'A case of 10 meal rations. Kept in a storage box of its own.',
         };
-        this.RATIONS_PER_CREW_DAY = 3;  // three meals
         this.STARTER_RATIONS      = 15; // aboard a new ship, in its one storage box: 5 days for one
 
         // What engineers can make. `components` basic components are taken

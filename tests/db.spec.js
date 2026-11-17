@@ -127,20 +127,20 @@ test.describe('db.js', () => {
         expect(conn.prepare('SELECT COUNT(*) AS n FROM market_listings').get().n).toBe(0);
     });
 
-    test('crew members round-trip health/shifts/dead, and re-saving fully replaces the roster', () => {
+    test('crew members round-trip health/shifts/dead/rested hours, and re-saving fully replaces the roster', () => {
         const conn = db.initDb(':memory:');
         const { id } = db.createSave(conn, 'Run A');
 
         const members = [
-            { id: 'player', health: 62.5, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }] },
-            { id: 'second', health: 0, varianceFactor: 0.85, dead: true, shifts: [] },
+            { id: 'player', health: 62.5, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }], restedDutyHours: 6.5 },
+            { id: 'second', health: 0, varianceFactor: 0.85, dead: true, shifts: [], restedDutyHours: 0 },
         ];
         db.saveSave(conn, id, { world: sampleWorld({ crew: { count: 2, members } }), shipInstances: { ships: [] } });
 
         expect(db.getSave(conn, id).world.crew.members).toEqual(members);
 
         // Re-saving with a smaller roster should fully replace, not append.
-        const solo = [{ id: 'player', health: 100, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }, { startHour: 14, endHour: 18 }] }];
+        const solo = [{ id: 'player', health: 100, varianceFactor: 1.1, dead: false, shifts: [{ startHour: 9, endHour: 13 }, { startHour: 14, endHour: 18 }], restedDutyHours: 8 }];
         db.saveSave(conn, id, { world: sampleWorld({ crew: { count: 1, members: solo } }), shipInstances: { ships: [] } });
 
         expect(db.getSave(conn, id).world.crew.members).toEqual(solo);

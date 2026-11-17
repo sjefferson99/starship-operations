@@ -24,7 +24,7 @@ class GameState {
                 count: game.crew,
                 members: (game.crewManifest ?? []).map(m => ({
                     id: m.id, health: m.health, varianceFactor: m.varianceFactor,
-                    dead: m.dead, shifts: m.shifts,
+                    dead: m.dead, shifts: m.shifts, restedDutyHours: m.restedDutyHours,
                 })),
             },
 
@@ -88,10 +88,13 @@ class GameState {
                 rationHours: s.freshWater.rationHours ?? 0,
                 blackLiquidL: s.blackWater.liquidL, blackSolidL: s.blackWater.solidL, blackCapacityL: s.blackWater.capacity,
                 blackExposureHours: s.blackWater.exposureHours ?? 0,
+                blackResidueL: s.blackWater.residueL ?? 0,
             },
             // The rations themselves are in the cargo's food boxes.
             food: {
                 starvedHours: s.food?.starvedHours ?? 0,
+                rationing: !!s.food?.rationing,
+                rationHours: s.food?.rationHours ?? 0,
             },
         };
 
@@ -257,12 +260,15 @@ class GameState {
 
         game.systems.blackWater.liquidL  = water.blackLiquidL ?? 0;
         game.systems.blackWater.solidL   = water.blackSolidL ?? 0;
-        game.systems.blackWater.current  = game.systems.blackWater.liquidL + game.systems.blackWater.solidL;
+        game.systems.blackWater.residueL = water.blackResidueL ?? 0; // absent before unreclaimable residue existed
+        game.systems.blackWater.current  = game.systems.blackWater.liquidL + game.systems.blackWater.solidL + game.systems.blackWater.residueL;
         game.systems.blackWater.capacity = water.blackCapacityL ?? 100;
         game.systems.blackWater.level    = (game.systems.blackWater.current / game.systems.blackWater.capacity) * 100;
         game.systems.blackWater.exposureHours = water.blackExposureHours ?? 0;
 
         game.systems.food.starvedHours = s.food?.starvedHours ?? 0;
+        game.systems.food.rationing    = s.food?.rationing ?? false; // absent before food rationing existed
+        game.systems.food.rationHours  = s.food?.rationHours ?? 0;
         // Derived from the food boxes by the next tick; cleared so nothing
         // from the game being left shows meanwhile.
         game.systems.food.rations  = 0;

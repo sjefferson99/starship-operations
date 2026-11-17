@@ -390,6 +390,23 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Black water the water maker can't reclaim (system_update.js
+    // _runWaterMaker), and each crew member's rested duty hours: the hours a
+    // day their body is used to, which follows a shift change over about a day
+    // (crew_manager.js) instead of jumping with it.
+    db => {
+        db.exec(`
+            ALTER TABLE ship_water ADD COLUMN black_residue_l REAL;
+            ALTER TABLE crew_members ADD COLUMN rested_duty_hours REAL;
+        `);
+    },
+    // Food rationing (half a ration a meal) and how long the crew have been underfed.
+    db => {
+        db.exec(`
+            ALTER TABLE ship_food ADD COLUMN rationing INTEGER;
+            ALTER TABLE ship_food ADD COLUMN ration_hours REAL;
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -481,6 +498,7 @@ function getSave(db, saveId) {
     const crewMembers = crewRows.map(r => ({
         id: r.id, health: r.health, varianceFactor: r.variance_factor,
         dead: !!r.dead, shifts: JSON.parse(r.shifts ?? '[]'),
+        restedDutyHours: r.rested_duty_hours,
     }));
 
     const commsRows = db.prepare('SELECT * FROM comms_locations WHERE save_id = ?').all(saveId);
@@ -577,9 +595,13 @@ function _composeShip(db, saveId, shipRow) {
                 rationHours: water.fresh_ration_hours,
                 blackLiquidL: water.black_liquid_l, blackSolidL: water.black_solid_l, blackCapacityL: water.black_capacity_l,
                 blackExposureHours: water.black_exposure_hours,
+                blackResidueL: water.black_residue_l,
             },
             // `present` is false for a save written before food existed (no row).
-            food: { present: !!food, starvedHours: food?.starved_hours ?? null },
+            food: {
+                present: !!food, starvedHours: food?.starved_hours ?? null,
+                rationing: food?.rationing == null ? null : !!food.rationing, rationHours: food?.ration_hours ?? null,
+            },
         },
         repairQueue: tasks.map(t => t.kind === 'fabricate'
             ? {
@@ -780,9 +802,9 @@ function _saveCrewMembers(db, saveId, members) {
     db.prepare('DELETE FROM crew_members WHERE save_id = ?').run(saveId);
     members.forEach(m => {
         db.prepare(`
-            INSERT INTO crew_members (save_id, id, health, variance_factor, dead, shifts)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(saveId, m.id, m.health, m.varianceFactor, m.dead ? 1 : 0, JSON.stringify(m.shifts ?? []));
+            INSERT INTO crew_members (save_id, id, health, variance_factor, dead, shifts, rested_duty_hours)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(saveId, m.id, m.health, m.varianceFactor, m.dead ? 1 : 0, JSON.stringify(m.shifts ?? []), m.restedDutyHours ?? null);
     });
 }
 
@@ -867,19 +889,19 @@ function _saveOneShip(db, saveId, ship) {
 
     const water = s.water ?? {};
     db.prepare(`
-        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l, black_exposure_hours)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l, black_exposure_hours, black_residue_l)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(save_id, ship_id) DO UPDATE SET
             fresh_current_l = excluded.fresh_current_l, fresh_capacity_l = excluded.fresh_capacity_l,
             fresh_rationing = excluded.fresh_rationing, fresh_depleted_hours = excluded.fresh_depleted_hours,
             fresh_ration_hours = excluded.fresh_ration_hours,
             black_liquid_l = excluded.black_liquid_l, black_solid_l = excluded.black_solid_l, black_capacity_l = excluded.black_capacity_l,
-            black_exposure_hours = excluded.black_exposure_hours
+            black_exposure_hours = excluded.black_exposure_hours, black_residue_l = excluded.black_residue_l
     `).run(
         saveId, ship.id, water.freshCurrentL ?? null, water.freshCapacityL ?? null,
         water.rationing ? 1 : 0, water.freshDepletedHours ?? null, water.rationHours ?? null,
         water.blackLiquidL ?? null, water.blackSolidL ?? null, water.blackCapacityL ?? null,
-        water.blackExposureHours ?? null
+        water.blackExposureHours ?? null, water.blackResidueL ?? null
     );
 
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
@@ -916,8 +938,8 @@ function _saveOneShip(db, saveId, ship) {
     db.prepare('DELETE FROM ship_food WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
     const food = s.food;
     if (food && food.present !== false && food.starvedHours != null) {
-        db.prepare('INSERT INTO ship_food (save_id, ship_id, starved_hours) VALUES (?, ?, ?)')
-            .run(saveId, ship.id, food.starvedHours);
+        db.prepare('INSERT INTO ship_food (save_id, ship_id, starved_hours, rationing, ration_hours) VALUES (?, ?, ?, ?, ?)')
+            .run(saveId, ship.id, food.starvedHours, food.rationing ? 1 : 0, food.rationHours ?? 0);
     }
 }
 

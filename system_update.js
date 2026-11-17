@@ -26,6 +26,7 @@ class SystemUpdate {
         this.WATER_MAKER_DRAW_W  = 30;
         this.WATER_MAKER_L_HR    = 6;
         this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR = 0.4; // condensing from air vs reclaiming waste
+        this.WATER_MAKER_RECLAIM_YIELD = 0.9; // share of processed black-water liquid that comes back as fresh water
 
         // Water usage, per crew member per day.
         this.WATER_CONSERVATIVE_L_PER_CREW_DAY = 25;
@@ -42,6 +43,11 @@ class SystemUpdate {
         this.SOLID_WASTE_L_PER_RATION = 1.5;
         this.FOOD_WARNING_DAYS        = 3;
         this.FOOD_CRITICAL_DAYS       = 1;
+        // Meals, on the ship's clock: one ration each per meal, half while rationing.
+        this.MEAL_HOURS               = [7, 13, 19];
+        this.FOOD_RATION_PER_MEAL     = 0.5;
+        // Hours of underfeeding paid back per hour of full meals.
+        this.FOOD_REFEED_RATE         = 2;
 
         // The black water tank counts as "full" (waste backing up into the
         // cabin — see CrewManager's sewage exposure) from this level up.
@@ -293,29 +299,69 @@ class SystemUpdate {
         fuel.consumeRateLhr = fuelBurnLhr;
     }
 
-    // The crew eat from the food boxes. Running out starts the starvation
-    // clock (CrewManager's hunger effects); any food at all stops it. What was
+    // The crew eat whole rations at meal times on the ship's clock (MEAL_HOURS),
+    // not a trickle: nobody eats half a pack between meals. Each meal every
+    // living member eats one ration, or half of one while food is rationed. A
+    // meal there isn't enough food for is missed (what there is gets shared),
+    // and the starvation clock runs from it until a full meal is eaten again.
+    // One huge tick can cross several meals; each is taken in turn. What was
     // eaten becomes this tick's solid waste, which _updateWater puts in the
-    // black water tank. Eating is clamped to what's aboard, so one huge tick
-    // can't eat food that isn't there.
+    // black water tank.
     _updateFood(dt) {
         const food  = this.game.systems.food;
         const fab   = this.game.fabrication;
         const hours = dt / 3600;
         const crew  = this.game.crew;
+        const perMeal = food.rationing ? this.FOOD_RATION_PER_MEAL : 1;
 
-        const perDay = fab.RATIONS_PER_CREW_DAY * crew;
-        const wanted = perDay * hours / 24;
-        const eaten  = fab.eat(wanted);
+        const end   = this.game.gameTime;
+        let   from  = end - dt;
+        let starved = food.starvedHours || 0;
+        let eaten   = 0;
+        this._mealTimesBetween(from, end).forEach(meal => {
+            if (starved > 0) starved += (meal - from) / 3600;
+            from = meal;
+            const need = perMeal * crew;
+            if (need <= 0) return;
+            const had = fab.eat(need);
+            eaten += had;
+            // A missed meal starts the clock (a hair above zero, so it reads as hungry).
+            starved = had >= need - 1e-9 ? 0 : Math.max(starved, 1e-6);
+        });
+        if (starved > 0) starved += (end - from) / 3600;
 
+        const perDay = this.MEAL_HOURS.length * perMeal * crew;
         food.eatRatePerDay = perDay;
         food.rations       = fab.rationsAboard();
         food.daysLeft      = perDay > 0 ? food.rations / perDay : Infinity;
-        // Hungry for the part of the tick there was nothing left to eat.
-        const unfedHours   = wanted > 0 ? hours * (1 - eaten / wanted) : 0;
-        food.starvedHours  = unfedHours > 1e-9 ? (food.starvedHours || 0) + unfedHours : 0;
+        food.starvedHours  = starved;
+        // Rationing builds up the time the crew have been underfed; full meals
+        // pay it back, FOOD_REFEED_RATE times as fast, so it can't be reset by
+        // flicking rationing off for one meal.
+        food.rationHours   = food.rationing
+            ? (food.rationHours || 0) + hours
+            : Math.max(0, (food.rationHours || 0) - hours * this.FOOD_REFEED_RATE);
+        food.nextMealIn    = this._nextMealIn(end);
         this._solidWasteL  = eaten * this.SOLID_WASTE_L_PER_RATION;
         food.solidRateLhr  = perDay / 24 * this.SOLID_WASTE_L_PER_RATION;
+    }
+
+    // Meal times in (from, to], as game seconds.
+    _mealTimesBetween(from, to) {
+        const times = [];
+        if (!(to > from)) return times;
+        for (let day = Math.floor(from / 86400); day * 86400 <= to; day++) {
+            this.MEAL_HOURS.forEach(h => {
+                const t = day * 86400 + h * 3600;
+                if (t > from && t <= to) times.push(t);
+            });
+        }
+        return times.sort((a, b) => a - b);
+    }
+
+    // Seconds until the next meal after `time`.
+    _nextMealIn(time) {
+        return this._mealTimesBetween(time, time + 86400)[0] - time;
     }
 
     _updateWater(dt) {
@@ -341,7 +387,7 @@ class SystemUpdate {
         const solidProduced  = this._solidWasteL || 0;
         this._solidWasteL    = 0;
         const totalProduced  = liquidProduced + solidProduced;
-        const capacityLeft   = Math.max(0, black.capacity - (black.liquidL + black.solidL));
+        const capacityLeft   = Math.max(0, black.capacity - (black.liquidL + black.solidL + (black.residueL || 0)));
         const overflowRatio  = totalProduced > 0 ? Math.min(1, capacityLeft / totalProduced) : 1;
 
         black.liquidL = black.liquidL + liquidProduced * overflowRatio;
@@ -353,7 +399,7 @@ class SystemUpdate {
         fresh.depletedHours  = fresh.current <= 0 ? (fresh.depletedHours || 0) + hours : 0;
         fresh.rationHours    = fresh.rationing ? (fresh.rationHours || 0) + hours : 0;
 
-        black.current = black.liquidL + black.solidL;
+        black.current = black.liquidL + black.solidL + (black.residueL || 0);
         black.level   = (black.current / black.capacity) * 100;
 
         // A full tank has nowhere to put new waste — it backs up into the cabin.
@@ -361,16 +407,21 @@ class SystemUpdate {
         // the moment the tank is relieved (dumped, or reclaimed by a water maker).
         black.exposureHours = black.level >= this.BLACK_WATER_FULL_PCT ? (black.exposureHours || 0) + hours : 0;
 
-        // Net of what the water maker took back out this tick, so the dashboard's
-        // fill rate goes negative when reclamation is winning.
+        // Net of what the water maker took back out this tick (less the residue
+        // it left behind), so the dashboard's fill rate goes negative when
+        // reclamation is winning.
         black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
         black.solidRateLhr  = this.game.systems.food?.solidRateLhr ?? 0;
-        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr - (black.reclaimRateLhr || 0);
+        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr
+                            - (black.reclaimRateLhr || 0) + (black.residueRateLhr || 0);
     }
 
     // Water maker: reclaims black-water liquid into fresh water first; while
     // parked in a breathable atmosphere it makes up any shortfall by condensing
     // moisture from outside air. In space, black-water liquid is its only source.
+    // Reclaiming isn't total: of each litre of liquid processed, only
+    // `reclaimYield` comes back as fresh water and the rest stays in the tank as
+    // residue nothing aboard can process — only a dump clears it.
     _runWaterMaker(hours) {
         const wm    = this.game.systems.waterMaker;
         const fresh = this.game.systems.freshWater;
@@ -378,34 +429,45 @@ class SystemUpdate {
         if (!wm) return;
 
         wm.outputLhr = 0; wm.loadFraction = 0; wm.source = 'none';
+        wm.fromBlackLhr = 0; wm.fromAirLhr = 0;
         black.reclaimRateLhr = 0;
+        black.residueRateLhr = 0;
         black.reclaimStarved = false; // true when the maker wanted more than the tank's liquid could give
         wm.ratedLhr  = this._moduleField('waterMaker', wm.tier, 'outputLhr', this.WATER_MAKER_L_HR) * (wm.count ?? 1);
+        wm.reclaimYield = Math.min(1, Math.max(0.01,
+            this._moduleField('waterMaker', wm.tier, 'reclaimYield', this.WATER_MAKER_RECLAIM_YIELD)));
         if (!this._isRunning(wm) || hours <= 0) return;
 
         const efficiency = this.game.repairManager.efficiencyFor('waterMaker');
         const maxL = wm.ratedLhr * efficiency * this._powerFraction() * hours;
         if (maxL <= 0) return;
 
+        // Black water always goes first; outside air only makes up the rest.
         const roomL     = Math.max(0, fresh.capacity - fresh.current);
         const wantL     = Math.min(maxL, roomL);
-        const fromBlack = Math.min(wantL, black.liquidL);
-        const fromAir   = this.game.inBreathableAtmosphere ? wantL - fromBlack : 0;
+        const processL  = Math.min(wantL / wm.reclaimYield, black.liquidL);
+        const fromBlack = processL * wm.reclaimYield;
+        const residueL  = processL - fromBlack;
+        const fromAir   = this.game.inBreathableAtmosphere ? Math.max(0, wantL - fromBlack) : 0;
         const madeL     = fromBlack + fromAir;
 
-        black.liquidL  -= fromBlack;
+        black.liquidL  -= processL;
+        black.residueL  = (black.residueL || 0) + residueL;
         fresh.current  += madeL;
 
         // Only the liquid can be reclaimed. If the maker had capacity to spare but
-        // the liquid ran out, what's left in the tank is solid matter it can't touch.
-        black.reclaimRateLhr = fromBlack / hours;
-        black.reclaimStarved = fromBlack < wantL;
+        // the liquid ran out, what's left in the tank is matter it can't touch.
+        black.reclaimRateLhr = processL / hours;
+        black.residueRateLhr = residueL / hours;
+        black.reclaimStarved = fromBlack < wantL - 1e-9;
 
         // Condensing clean moisture from outside air is far less work than
         // processing waste, so that share of the output draws less power
         // (`atmospherePowerFactor` in module_specs.json).
         const airFactor = this._moduleField('waterMaker', wm.tier, 'atmospherePowerFactor', this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR);
         wm.outputLhr    = madeL / hours;
+        wm.fromBlackLhr = fromBlack / hours;
+        wm.fromAirLhr   = fromAir / hours;
         wm.loadFraction = (fromBlack + fromAir * airFactor) / maxL;
         wm.source       = madeL <= 0 ? (roomL <= 0 ? 'full' : 'none') : fromAir > fromBlack ? 'atmosphere' : 'blackWater';
     }
