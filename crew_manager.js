@@ -279,6 +279,13 @@ class CrewManager {
 
             if (infectionChance > 0 && this.game.rng.next() < infectionChance) {
                 health -= this.INFECTION_DAMAGE_PCT;
+                // No lasting state marks an infection, so it is reported here rather than spotted later.
+                const index = (this.game.crewManifest || []).indexOf(member);
+                this.game.notifications?.add({
+                    key: `infection:${member.id}`, level: 'critical',
+                    title: `Crew ${index + 1} has caught an infection`,
+                    detail: `Sewage in the cabin: −${this.INFECTION_DAMAGE_PCT}% health. Dump the black water tank.`,
+                });
             }
 
             member.health = Math.max(0, Math.min(100, health));

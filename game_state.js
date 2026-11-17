@@ -44,6 +44,9 @@ class GameState {
                 inBreathableAtmosphere: game.inBreathableAtmosphere,
                 ventsOpen:              game.ventsOpen,
             },
+
+            // The Notifications list (notifications.js), newest first.
+            notifications: game.notifications?.snapshot() ?? [],
         };
     }
 
@@ -169,6 +172,8 @@ class GameState {
 
         game.inBreathableAtmosphere = world.environment?.inBreathableAtmosphere ?? false;
         game.ventsOpen              = world.environment?.ventsOpen              ?? false;
+        // Payloads from before notifications existed start with an empty list.
+        game.notifications?.restore(world.notifications ?? []);
 
         if (shipInstances) {
             const inst = shipInstances.ships?.find(sh => sh.id === game.shipInstanceId);

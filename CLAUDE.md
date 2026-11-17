@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `rng.js` → `game_state.js` → `system_update.js` →
-`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `main.js` → `sound.js`. That order is load-bearing —
+`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `notifications.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -193,6 +193,17 @@ set by the player in the Sounds panel (`#sound-screen`, which `sound.js` also ow
 `localStorage`; a recipe's own `gain` is only its level relative to others in the same channel, and
 `BASE` sets what each channel's default slider position means. The intended tone is calm (soft chimes, never alarms). `sound.log` records which sounds
 were requested, which is what `tests/sound.spec.js` asserts on.
+
+**Notifications (`notifications.js`, `Notifications`)** are the list behind the header's Notifications
+pill (count, delete one, Clear all). `check()` runs at the end of every `updateDisplay()` and diffs a small
+state snapshot against the last one — the same kinds of event `sound.js` chimes for (a status or crew
+health band getting worse, a repair stage landing, a module destroyed, purchases, compost sealed / ready /
+sold, a black-water dump) — so **a new sound trigger should get a matching notification, and vice versa**.
+Vent toggles are deliberately not listed (the player's own click). Events with no state left to diff call
+`game.notifications.add()` where they happen (the infection roll in `CrewManager`). Entries with the same
+`key` and title are grouped with a count rather than repeated. The list is game state: saved as
+`world.notifications` (the `notifications` table) and restored by `GameState.restore`, which also resets
+the baseline so nothing is listed on arrival.
 
 **`window.game`** is deliberately exposed in `main.js` so `tests/*.spec.js` can drive internal
 state directly in a real browser via Playwright, rather than re-implementing game logic in the

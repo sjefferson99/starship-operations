@@ -123,6 +123,7 @@ class StarshipGame {
         this.systemUpdate   = new SystemUpdate(this);
         this.tour           = new Tour(this);
         this.timeline       = new Timeline(this);
+        this.notifications  = new Notifications(this);
         this._bindEvents();
         this._loadShipDatabases();
         this.setBackground('space');
@@ -294,6 +295,8 @@ class StarshipGame {
             // The Timeline sits on top of the pause menu (and of GAME OVER):
             // Escape closes it first.
             if (this.timeline.isOpen()) { this.timeline.close(); return; }
+            // So does the Notifications list — without pausing as well.
+            if (this.notifications.isOpen()) { this.notifications.close(); return; }
             if (this.gameActive) this.togglePause();
         });
     }
@@ -447,6 +450,7 @@ class StarshipGame {
         this.crewManager.resetRoster();
         this.crew                   = this.crewManager.aliveCount();
         this.commsNav.generate(seed);
+        this.notifications.restore([]);
 
         this._resetPauseMenuUI();
         this._applySpeedUI();
@@ -873,6 +877,8 @@ class StarshipGame {
         this._displayRepairQueue();
         // Contacts and market access follow the transceiver's live range.
         if (Overlay.isOpen(this.commsNavScreen)) this._renderCommsNavScreen();
+        // Anything that changed since the last redraw — a tick or a player action — goes on the list.
+        this.notifications?.check();
     }
 
     // Suffix for a powered device's ON/OFF line when the ship can't supply it.

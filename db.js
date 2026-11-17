@@ -341,6 +341,23 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Notifications (notifications.js): the save's list, newest first by position.
+    db => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS notifications (
+                save_id INTEGER,
+                id TEXT,
+                position INTEGER,
+                key TEXT,
+                level TEXT,
+                title TEXT,
+                detail TEXT,
+                game_time REAL,
+                count INTEGER,
+                PRIMARY KEY (save_id, id)
+            );
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -411,7 +428,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['notifications', 'storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -445,6 +462,11 @@ function getSave(db, saveId) {
         repairPct: r.repair_pct, price: r.price,
     }));
 
+    const notifications = db.prepare('SELECT * FROM notifications WHERE save_id = ? ORDER BY position').all(saveId).map(r => ({
+        id: r.id, key: r.key ?? null, level: r.level, title: r.title, detail: r.detail ?? '',
+        gameTime: r.game_time, count: r.count ?? 1,
+    }));
+
     const world = {
         version: save.version,
         savedAt: save.updated_at,
@@ -457,6 +479,7 @@ function getSave(db, saveId) {
             inBreathableAtmosphere: !!save.in_breathable_atmosphere,
             ventsOpen: !!save.vents_open,
         },
+        notifications,
     };
 
     const shipRows = db.prepare('SELECT * FROM ships WHERE save_id = ?').all(saveId);
@@ -569,6 +592,7 @@ function _writeSave(db, saveId, { world, shipInstances }) {
         _saveCrewMembers(db, saveId, world?.crew?.members ?? []);
         _saveCommsLocations(db, saveId, world?.comms?.locations ?? []);
         _saveMarketListings(db, saveId, world?.comms?.market ?? []);
+        _saveNotifications(db, saveId, world?.notifications ?? []);
 }
 
 // ── Rewind checkpoints ──────────────────────────────────────────────────────
@@ -731,6 +755,18 @@ function _saveMarketListings(db, saveId, listings) {
             INSERT INTO market_listings (save_id, id, location_id, module_key, name, repair_pct, price)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `).run(saveId, l.id, l.locationId ?? null, l.moduleKey ?? null, l.name ?? null, l.repairPct ?? null, l.price ?? null);
+    });
+}
+
+function _saveNotifications(db, saveId, notifications) {
+    db.prepare('DELETE FROM notifications WHERE save_id = ?').run(saveId);
+    const insert = db.prepare(`
+        INSERT INTO notifications (save_id, id, position, key, level, title, detail, game_time, count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    notifications.forEach((n, i) => {
+        insert.run(saveId, String(n.id), i, n.key ?? null, n.level ?? 'info', String(n.title ?? ''),
+            n.detail ?? '', n.gameTime ?? 0, n.count ?? 1);
     });
 }
 
