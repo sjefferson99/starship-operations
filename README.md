@@ -2,6 +2,8 @@
 
 A browser dashboard game: keep a worn-out salvage ship — and its crew — alive.
 
+**_This game is in early proof of concept stage, there is no finished plot, plenty of bugs and approximiately 10 minutes of gameplay right now. But it shows the concept and how it could grow._**
+
 ## Requirements
 
 - [Node.js](https://nodejs.org/) 22.5 or newer (the game uses Node's built-in SQLite for save games)
