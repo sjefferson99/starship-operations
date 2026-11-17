@@ -154,7 +154,10 @@ level, alert chimes, repairs landing, vents, purchases, dumps) comes from diffin
 snapshot every 400 ms in `_poll()`. All audio is synthesised with the Web Audio API — there are no
 audio files — and the `AudioContext` is only created on the first user gesture. To add a sound, add
 a recipe to `_recipes()` and a trigger in `_onClick()` or `_poll()`; don't add calls into it from
-game code. The intended tone is calm (soft chimes, never alarms). `sound.log` records which sounds
+game code. Loudness is mixed per channel — buttons, effects, alerts, systems hum, plus a master —
+set by the player in the Sounds panel (`#sound-screen`, which `sound.js` also owns) and stored in
+`localStorage`; a recipe's own `gain` is only its level relative to others in the same channel, and
+`BASE` sets what each channel's default slider position means. The intended tone is calm (soft chimes, never alarms). `sound.log` records which sounds
 were requested, which is what `tests/sound.spec.js` asserts on.
 
 **`window.game`** is deliberately exposed in `main.js` so `tests/*.spec.js` can drive internal

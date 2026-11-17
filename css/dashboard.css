@@ -1145,3 +1145,29 @@
 
 /* Explanatory note inside a rate panel (e.g. why the water maker is not reclaiming more) */
 .rate-note { font-size: 0.72rem; color: #ffb74d; line-height: 1.4; padding-top: 4px; }
+
+/* ── Sounds panel (sound.js) ── */
+.sound-rows { display: flex; flex-direction: column; gap: 4px; }
+.sound-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 44px 58px;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.sound-row[data-channel="master"] { border-top: none; padding-bottom: 12px; }
+.sound-row-label { display: flex; flex-direction: column; gap: 2px; }
+.sound-row-name { font-size: 0.86rem; font-weight: 600; color: #e0f7fa; }
+.sound-row-hint { font-size: 0.68rem; color: #78909c; }
+.sound-row-value { font-size: 0.8rem; font-family: monospace; color: #90caf9; text-align: right; }
+.sound-slider { width: 100%; accent-color: #4fc3f7; cursor: pointer; }
+.sound-slider:disabled { opacity: 0.35; cursor: not-allowed; }
+.sound-test-btn { padding: 4px 10px; font-size: 0.72rem; border-radius: 12px; }
+.sound-test-btn:hover { transform: none; }
+.sound-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 6px; }
+.sound-footer-note { font-size: 0.7rem; color: #546e7a; font-style: italic; }
+@media (max-width: 700px) {
+    .sound-row { grid-template-columns: 1fr 44px 58px; }
+    .sound-row-label { grid-column: 1 / -1; }
+}

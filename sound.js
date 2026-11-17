@@ -7,18 +7,45 @@
 // finishing, vents, purchases…) from comparing a small snapshot of game state
 // a few times a second. That is why nothing in main.js knows it exists —
 // this file wires itself up at the bottom, after main.js has created the game.
+// It also owns its own settings panel (#sound-screen).
 //
 // Browsers only allow audio after a user gesture, so the AudioContext is
 // created on the first pointer/key press rather than at load.
 
 class SoundManager {
     constructor(game) {
-        this.game    = game;
-        this.ctx     = null;   // created lazily on the first user gesture
-        this.OFF_KEY = 'starshipOps.soundOff';
-        this.enabled = this._stored() !== '1';
+        this.game = game;
+        this.ctx  = null;   // created lazily on the first user gesture
 
-        this.VOLUME            = 0.5;   // master level when sound is on
+        // ── Mix ─────────────────────────────────────────────────────────────
+        // Four channels plus a master, each a 0–1 slider in the Sounds panel.
+        // A channel at its default slider position plays at BASE loudness (a
+        // multiplier on each recipe's own level); the top of the slider is
+        // 1 / DEFAULT_LEVEL times that, so there is always headroom above the
+        // default. A limiter on the output keeps a loud mix from clipping.
+        this.CHANNELS = [
+            { key: 'ui',     label: 'Buttons',     hint: 'Clicks and switches',                   test: 'click'   },
+            { key: 'effect', label: 'Effects',     hint: 'Comms, vents, repairs, purchases',       test: 'comms'   },
+            { key: 'alert',  label: 'Alerts',      hint: 'Warning and critical chimes',            test: 'warning' },
+            { key: 'hum',    label: 'Systems hum', hint: 'Generator and running equipment',        test: null      },
+        ];
+        // BASE and MASTER_MAX are the mix Stephen settled on by ear (2026-11-17),
+        // re-centred so that every slider's default position reproduces it.
+        this.BASE          = { ui: 1.6, effect: 2.8, alert: 3.6, hum: 0.5 };
+        this.DEFAULT_LEVEL = 0.4;   // slider position that gives BASE — so the maximum is 2.5× the default
+        this.MASTER_MAX    = 2.0;   // master gain at the top of its slider (default 50% = unity)
+        this.DEFAULTS      = { enabled: true, master: 0.5, ui: 0.4, effect: 0.4, alert: 0.4, hum: 0.4 };
+        this.UI_SOUNDS     = ['click', 'close', 'switchOn', 'switchOff'];
+        this.ALERT_SOUNDS  = ['warning', 'critical'];
+
+        // v2: slider positions mean something different from the first version
+        // of the panel, so levels saved under the old key are not carried over
+        // (only whether sound was on).
+        this.SETTINGS_KEY     = 'starshipOps.soundSettings.v2';
+        this.OLD_SETTINGS_KEY = 'starshipOps.soundSettings';
+        this.LEGACY_OFF_KEY   = 'starshipOps.soundOff'; // the original on/off-only preference
+        this.settings = this._loadSettings();
+
         this.POLL_MS           = 400;
         this.ALERT_MIN_GAP_MS  = 4000;  // alerts never stack up, even at 1000× speed
         this.CHIME_MIN_GAP_MS  = 1200;
@@ -30,13 +57,13 @@ class SoundManager {
         this.STATUS_KEYS     = ['o2', 'co2', 'power', 'fuel', 'freshWater', 'blackWater', 'transceiver', 'waterMaker'];
 
         this.log   = [];    // names of the most recent sounds — for tests and debugging
+        this._mix  = 1;     // loudness of the channel currently being scheduled (set in play())
         this._prev = null;  // last state snapshot (null = nothing to compare against yet)
         this._lastAlertAt = 0;
         this._lastChimeAt = 0;
+        this._humPreviewUntil = 0;
 
-        this.toggleEl = document.getElementById('sound-toggle');
-        if (this.toggleEl) this.toggleEl.addEventListener('click', () => this.setEnabled(!this.enabled));
-        this._renderToggle();
+        this._bindPanel();
 
         const unlock = () => this._ensureContext();
         document.addEventListener('pointerdown', unlock, true);
@@ -49,22 +76,131 @@ class SoundManager {
         setInterval(() => this._poll(), this.POLL_MS);
     }
 
-    // ── Preference ──────────────────────────────────────────────────────────
+    get enabled() { return this.settings.enabled; }
 
-    _stored() { try { return localStorage.getItem(this.OFF_KEY); } catch { return null; } }
+    // ── Settings ────────────────────────────────────────────────────────────
+
+    _loadSettings() {
+        const settings = { ...this.DEFAULTS };
+        try {
+            const saved = JSON.parse(localStorage.getItem(this.SETTINGS_KEY) ?? 'null');
+            if (saved && typeof saved === 'object') {
+                Object.keys(this.DEFAULTS).forEach(key => {
+                    if (key === 'enabled') { if (typeof saved.enabled === 'boolean') settings.enabled = saved.enabled; }
+                    else if (Number.isFinite(saved[key])) settings[key] = Math.max(0, Math.min(1, saved[key]));
+                });
+            } else {
+                const old = JSON.parse(localStorage.getItem(this.OLD_SETTINGS_KEY) ?? 'null');
+                if (old && typeof old.enabled === 'boolean') settings.enabled = old.enabled;
+                else if (localStorage.getItem(this.LEGACY_OFF_KEY) === '1') settings.enabled = false;
+            }
+        } catch { /* unreadable — defaults */ }
+        return settings;
+    }
+
+    _saveSettings() {
+        try { localStorage.setItem(this.SETTINGS_KEY, JSON.stringify(this.settings)); } catch { /* not persisted */ }
+    }
 
     setEnabled(on) {
-        this.enabled = on;
-        try { on ? localStorage.removeItem(this.OFF_KEY) : localStorage.setItem(this.OFF_KEY, '1'); } catch { /* not persisted */ }
-        if (this.master) this.master.gain.setTargetAtTime(on ? this.VOLUME : 0, this.ctx.currentTime, 0.05);
-        this._renderToggle();
+        this.settings.enabled = !!on;
+        this._settingsChanged();
         if (on) this.play('click');
     }
 
-    _renderToggle() {
-        if (!this.toggleEl) return;
-        this.toggleEl.textContent = this.enabled ? 'Sound: On' : 'Sound: Off';
-        this.toggleEl.title = this.enabled ? 'Mute sound effects' : 'Turn sound effects on';
+    // `key` is 'master' or a channel key; `level` is the 0–1 slider position.
+    setLevel(key, level) {
+        if (!(key in this.DEFAULTS) || key === 'enabled') return;
+        this.settings[key] = Math.max(0, Math.min(1, level));
+        this._settingsChanged();
+    }
+
+    resetSettings() {
+        this.settings = { ...this.DEFAULTS };
+        this._settingsChanged();
+    }
+
+    _settingsChanged() {
+        this._saveSettings();
+        if (this.master) this.master.gain.setTargetAtTime(this._masterGain(), this.ctx.currentTime, 0.03);
+        this._applyHum(0.08);
+        this._renderPanel();
+    }
+
+    _masterGain() {
+        return this.settings.enabled ? this.settings.master * this.MASTER_MAX : 0;
+    }
+
+    // Loudness multiplier for a channel at its current slider position.
+    channelGain(key) {
+        return this.BASE[key] * (this.settings[key] / this.DEFAULT_LEVEL);
+    }
+
+    // ── Settings panel ──────────────────────────────────────────────────────
+
+    _bindPanel() {
+        this.toggleEl = document.getElementById('sound-toggle');
+        this.screenEl = document.getElementById('sound-screen');
+        if (!this.toggleEl || !this.screenEl) return;
+
+        const rowsEl = document.getElementById('sound-channel-rows');
+        rowsEl.innerHTML = [{ key: 'master', label: 'Overall volume', hint: 'Everything', test: null }, ...this.CHANNELS].map(ch => `
+            <div class="sound-row" data-channel="${ch.key}">
+                <div class="sound-row-label">
+                    <span class="sound-row-name">${ch.label}</span>
+                    <span class="sound-row-hint">${ch.hint}</span>
+                </div>
+                <input type="range" class="sound-slider" id="sound-level-${ch.key}" min="0" max="100" step="1" aria-label="${ch.label} volume">
+                <span class="sound-row-value" id="sound-value-${ch.key}"></span>
+                ${ch.key === 'master' ? '<span class="sound-test-spacer"></span>'
+                                      : `<button class="sound-test-btn" data-channel="${ch.key}" title="Play a sample">Test</button>`}
+            </div>`).join('');
+
+        this.toggleEl.addEventListener('click', () => this.openPanel());
+        document.getElementById('sound-screen-close-btn').addEventListener('click', () => this.closePanel());
+        document.getElementById('sound-enabled-toggle').addEventListener('click', () => this.setEnabled(!this.enabled));
+        document.getElementById('sound-reset-btn').addEventListener('click', () => this.resetSettings());
+
+        rowsEl.querySelectorAll('.sound-slider').forEach(slider =>
+            slider.addEventListener('input', () => this.setLevel(slider.closest('.sound-row').dataset.channel, Number(slider.value) / 100))
+        );
+        rowsEl.querySelectorAll('.sound-test-btn').forEach(btn =>
+            btn.addEventListener('click', () => this.testChannel(btn.dataset.channel))
+        );
+        this._renderPanel();
+    }
+
+    openPanel()  { this.screenEl.style.display = 'flex'; this._renderPanel(); }
+    closePanel() { this.screenEl.style.display = 'none'; }
+
+    _renderPanel() {
+        if (!this.toggleEl || !this.screenEl) return;
+        this.toggleEl.textContent = this.enabled ? 'Sounds' : 'Sounds: Off';
+        this.toggleEl.title = 'Sound settings';
+
+        const onBtn = document.getElementById('sound-enabled-toggle');
+        onBtn.textContent = this.enabled ? 'Turn All Sounds Off' : 'Turn Sounds On';
+        onBtn.className   = 'toggle-btn ' + (this.enabled ? 'btn-on' : 'btn-off');
+        document.getElementById('sound-enabled-status').innerHTML = 'Sounds: <strong>' + (this.enabled ? 'ON' : 'OFF') + '</strong>';
+
+        ['master', ...this.CHANNELS.map(ch => ch.key)].forEach(key => {
+            const pct = Math.round(this.settings[key] * 100);
+            const slider = document.getElementById(`sound-level-${key}`);
+            if (Number(slider.value) !== pct) slider.value = pct; // don't fight the thumb mid-drag
+            slider.disabled = !this.enabled;
+            document.getElementById(`sound-value-${key}`).textContent = pct + '%';
+        });
+    }
+
+    // Plays a sample of a channel at its current level. The hum has no
+    // one-shot sound, so it is held on briefly instead (whatever the ship is doing).
+    testChannel(key) {
+        const channel = this.CHANNELS.find(ch => ch.key === key);
+        if (!channel) return;
+        if (channel.test) { this.play(channel.test); return; }
+        this._humPreviewUntil = Date.now() + 2500;
+        this._applyHum(0.15);
+        setTimeout(() => this._applyHum(0.4), 2600);
     }
 
     // ── Audio plumbing ──────────────────────────────────────────────────────
@@ -79,8 +215,18 @@ class SoundManager {
         try {
             this.ctx    = new AudioCtx();
             this.master = this.ctx.createGain();
-            this.master.gain.value = this.enabled ? this.VOLUME : 0;
-            this.master.connect(this.ctx.destination);
+            this.master.gain.value = this._masterGain();
+
+            // Safety limiter: with every slider at maximum the mix could
+            // otherwise clip. At default levels it does nothing.
+            const limiter = this.ctx.createDynamicsCompressor();
+            limiter.threshold.value = -6;
+            limiter.knee.value      = 6;
+            limiter.ratio.value     = 12;
+            limiter.attack.value    = 0.003;
+            limiter.release.value   = 0.15;
+            this.master.connect(limiter).connect(this.ctx.destination);
+
             this._buildHum();
         } catch { this.ctx = null; }
     }
@@ -94,7 +240,7 @@ class SoundManager {
         osc.frequency.setValueAtTime(freq, t0);
         if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
         env.gain.setValueAtTime(0.0001, t0);
-        env.gain.exponentialRampToValueAtTime(gain, t0 + attack);
+        env.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain * this._mix), t0 + attack);
         env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
         osc.connect(env).connect(this.master);
         osc.start(t0);
@@ -124,7 +270,7 @@ class SoundManager {
         filter.frequency.setValueAtTime(from, t0);
         if (to) filter.frequency.exponentialRampToValueAtTime(to, t0 + dur);
         env.gain.setValueAtTime(0.0001, t0);
-        env.gain.exponentialRampToValueAtTime(gain, t0 + attack);
+        env.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain * this._mix), t0 + attack);
         env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
         src.connect(filter).connect(env).connect(this.master);
         src.start(t0);
@@ -132,7 +278,8 @@ class SoundManager {
     }
 
     // ── The sounds ──────────────────────────────────────────────────────────
-    // Each is a few notes at most. Anything recurring is kept very quiet.
+    // Each is a few notes at most. The levels here are relative to each other
+    // within a channel; overall loudness is the channel's job (see BASE).
 
     _recipes() {
         return {
@@ -167,13 +314,19 @@ class SoundManager {
         };
     }
 
+    channelOf(name) {
+        return this.UI_SOUNDS.includes(name) ? 'ui' : this.ALERT_SOUNDS.includes(name) ? 'alert' : 'effect';
+    }
+
     play(name) {
         if (!this.enabled) return;
         this.log.push(name);
         if (this.log.length > 50) this.log.shift();
         if (!this.ctx) return;
         const recipe = (this._recipeCache ??= this._recipes())[name];
-        if (recipe) { try { recipe(); } catch { /* never let a sound break the game */ } }
+        // Every note the recipe schedules picks up its channel's loudness.
+        this._mix = this.channelGain(this.channelOf(name));
+        if (recipe && this._mix > 0) { try { recipe(); } catch { /* never let a sound break the game */ } }
     }
 
     // ── Hum ─────────────────────────────────────────────────────────────────
@@ -235,19 +388,24 @@ class SoundManager {
         };
     }
 
-    _applyHum() {
+    _applyHum(timeConstant = 0.6) {
         if (!this.ctx || !this.humGenerator) return;
-        const levels = this.humLevels();
+        // While "Test" is held on the hum row, play a typical busy ship instead of the real state.
+        const previewing = Date.now() < this._humPreviewUntil;
+        const levels = previewing ? { generator: this.HUM_GENERATOR, systems: this.HUM_PER_SYSTEM * 2 } : this.humLevels();
+        const mix = this.channelGain('hum');
         const now = this.ctx.currentTime;
-        this.humGenerator.gain.setTargetAtTime(levels.generator * 0.09, now, 0.6);
-        this.humSystems.gain.setTargetAtTime(levels.systems * 0.035, now, 0.6);
+        this.humGenerator.gain.setTargetAtTime(levels.generator * 0.09 * mix, now, timeConstant);
+        this.humSystems.gain.setTargetAtTime(levels.systems * 0.035 * mix, now, timeConstant);
     }
 
     // ── UI clicks ───────────────────────────────────────────────────────────
 
     _onClick(e) {
         const el = e.target.closest('button, .stat-clickable, .comms-location-card, .comms-marker, .crew-idle-text');
-        if (!el || el.disabled || el === this.toggleEl) return;
+        if (!el || el.disabled) return;
+        // These make their own sound (a sample, or the on/off confirmation).
+        if (el.classList.contains('sound-test-btn') || el.id === 'sound-enabled-toggle') return;
 
         if (el.id === 'comms-nav-btn') return this.play('comms');
         if (el.classList.contains('overlay-close-btn') || el.id === 'resume-btn') return this.play('close');
@@ -269,10 +427,6 @@ class SoundManager {
         });
         return {
             saveId: g.saveId,
-            severity: Math.max(
-                crewRank[g.crewManager.worstStatus()] ?? 0,
-                ...this.STATUS_KEYS.map(key => (s[key] && s[key].installed !== false ? rank[s[key].status] ?? 0 : 0))
-            ),
             // Per-system ranks, so one thing getting worse is heard even while another is already bad.
             ranks: this.STATUS_KEYS.map(key => (s[key] && s[key].installed !== false ? rank[s[key].status] ?? 0 : 0))
                 .concat(crewRank[g.crewManager.worstStatus()] ?? 0),

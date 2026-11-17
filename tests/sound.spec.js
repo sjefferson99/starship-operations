@@ -121,22 +121,100 @@ test.describe('sound effects', () => {
         expect(await log(page)).toEqual(['repaired', 'destroyed', 'ventOpen', 'ventClose', 'purchase', 'flush', 'fine']);
     });
 
-    test('the Sound pill mutes everything and remembers the choice', async ({ page }) => {
+    test('the Sounds panel turns everything off and remembers the choice', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
 
-        await expect(page.locator('#sound-toggle')).toHaveText('Sound: On');
+        await expect(page.locator('#sound-toggle')).toHaveText('Sounds');
         await page.click('#sound-toggle');
-        await expect(page.locator('#sound-toggle')).toHaveText('Sound: Off');
+        await expect(page.locator('#sound-screen')).toBeVisible();
+        await page.click('#sound-enabled-toggle');
+        await expect(page.locator('#sound-enabled-status')).toHaveText('Sounds: OFF');
+        await expect(page.locator('#sound-level-ui')).toBeDisabled();
+        await page.click('#sound-screen-close-btn');
+        await expect(page.locator('#sound-toggle')).toHaveText('Sounds: Off');
         await clearLog(page);
 
         await page.click('#speed-10x');
         await page.click('#o2-toggle');
         expect(await log(page)).toEqual([]);
-        expect(await page.evaluate(() => localStorage.getItem('starshipOps.soundOff'))).toBe('1');
 
         await page.reload();
-        await expect(page.locator('#sound-toggle')).toHaveText('Sound: Off');
+        await expect(page.locator('#sound-toggle')).toHaveText('Sounds: Off');
         expect(await page.evaluate(() => window.sound.enabled)).toBe(false);
+    });
+
+    test('each channel has its own level, with headroom above the default, and the levels persist', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+        await page.click('#sound-toggle');
+
+        // Overall volume plus the four channels, all starting at their defaults.
+        await expect(page.locator('.sound-row')).toHaveCount(5);
+        await expect(page.locator('.sound-row-name')).toHaveText(['Overall volume', 'Buttons', 'Effects', 'Alerts', 'Systems hum']);
+        await expect(page.locator('#sound-value-master')).toHaveText('50%');
+        for (const key of ['ui', 'effect', 'alert', 'hum']) await expect(page.locator(`#sound-value-${key}`)).toHaveText('40%');
+
+        const gains = () => page.evaluate(() => ({
+            ui: window.sound.channelGain('ui'), effect: window.sound.channelGain('effect'),
+            alert: window.sound.channelGain('alert'), hum: window.sound.channelGain('hum'),
+        }));
+        const before = await gains();
+
+        // Hum up to maximum, alerts off; the others are untouched — they really are separate.
+        await page.locator('#sound-level-hum').fill('100');
+        await page.locator('#sound-level-alert').fill('0');
+        await expect(page.locator('#sound-value-hum')).toHaveText('100%');
+        const after = await gains();
+        expect(after.hum).toBeCloseTo(before.hum * 2.5, 5);
+        expect(after.alert).toBe(0);
+        expect(after.ui).toBe(before.ui);
+        expect(after.effect).toBe(before.effect);
+
+        // Which channel each sound belongs to.
+        expect(await page.evaluate(() => ['click', 'switchOn', 'comms', 'ventOpen', 'repaired', 'warning', 'critical'].map(n => window.sound.channelOf(n))))
+            .toEqual(['ui', 'ui', 'effect', 'effect', 'effect', 'alert', 'alert']);
+
+        // Test buttons play a sample of their own channel (and not a button click on top).
+        await clearLog(page);
+        await page.click('.sound-test-btn[data-channel="effect"]');
+        await page.click('.sound-test-btn[data-channel="ui"]');
+        expect(await log(page)).toEqual(['comms', 'click']);
+
+        await page.reload();
+        expect(await page.evaluate(() => ({ hum: window.sound.settings.hum, alert: window.sound.settings.alert, ui: window.sound.settings.ui })))
+            .toEqual({ hum: 1, alert: 0, ui: 0.4 });
+
+        // Reset puts everything back.
+        await page.evaluate(() => window.sound.resetSettings());
+        expect(await page.evaluate(() => window.sound.settings)).toEqual({ enabled: true, master: 0.5, ui: 0.4, effect: 0.4, alert: 0.4, hum: 0.4 });
+    });
+
+    test('an older on/off-only preference is still honoured', async ({ page }) => {
+        await page.addInitScript(() => {
+            if (!localStorage.getItem('starshipOps.soundSettings.v2')) localStorage.setItem('starshipOps.soundOff', '1');
+        });
+        await page.goto('/');
+        expect(await page.evaluate(() => window.sound.enabled)).toBe(false);
+    });
+
+    test('levels saved by the first version of the panel are dropped, keeping only on/off', async ({ page }) => {
+        await page.addInitScript(() => {
+            if (!localStorage.getItem('starshipOps.soundSettings.v2')) {
+                localStorage.setItem('starshipOps.soundSettings', JSON.stringify({ enabled: false, master: 1, ui: 0.2, effect: 0.4, alert: 0.6, hum: 0.2 }));
+            }
+        });
+        await page.goto('/');
+        expect(await page.evaluate(() => window.sound.settings)).toEqual({ enabled: false, master: 0.5, ui: 0.4, effect: 0.4, alert: 0.4, hum: 0.4 });
+    });
+
+    test('the default mix is the tuned one', async ({ page }) => {
+        await page.goto('/');
+        const mix = await page.evaluate(() => {
+            const s = window.sound;
+            return { master: s._masterGain(), ui: s.channelGain('ui'), effect: s.channelGain('effect'), alert: s.channelGain('alert'), hum: s.channelGain('hum') };
+        });
+        const expected = { master: 1, ui: 1.6, effect: 2.8, alert: 3.6, hum: 0.5 };
+        Object.keys(expected).forEach(key => expect(mix[key]).toBeCloseTo(expected[key], 6));
     });
 });
