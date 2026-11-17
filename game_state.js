@@ -94,8 +94,32 @@ class GameState {
                 registration: game.shipRegistration,
                 systemState,
                 repairQueue: game.repairQueue ?? [],
+                cargo: GameState._cargoSnapshot(game.cargo),
             }],
         };
+    }
+
+    // Supplies aboard and storage boxes (fabrication.js).
+    static _cargoSnapshot(cargo) {
+        const c = cargo ?? Fabrication.defaultCargo();
+        return {
+            items: { ...c.items },
+            boxes: (c.boxes ?? []).map(b => ({
+                id: b.id, kind: b.kind ?? null, fillL: b.fillL ?? 0,
+                sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
+            })),
+        };
+    }
+
+    // Payloads from before fabrication have no cargo: an empty hold.
+    static _applyCargo(game, saved) {
+        const cargo = Fabrication.defaultCargo();
+        Object.entries(saved?.items ?? {}).forEach(([key, n]) => { cargo.items[key] = n ?? 0; });
+        cargo.boxes = (saved?.boxes ?? []).map(b => ({
+            id: b.id, kind: b.kind ?? null, fillL: b.fillL ?? 0,
+            sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
+        }));
+        game.cargo = cargo;
     }
 
     static _moduleSnapshot(sys) {
@@ -154,6 +178,7 @@ class GameState {
                 game.shipRegistration = inst.registration;
             }
             game.repairQueue = inst?.repairQueue ?? [];
+            GameState._applyCargo(game, inst?.cargo);
         }
     }
 
@@ -307,6 +332,7 @@ class GameState {
         const shipInstance = GameState.shipInstanceSnapshot(game).ships[0];
         snap.shipSystemState = shipInstance.systemState;
         snap.repairQueue     = shipInstance.repairQueue;
+        snap.cargo           = shipInstance.cargo;
 
         const day  = Math.floor(snap.world.gameTime / 86400) + 1;
         const json = JSON.stringify(snap, null, 2);
@@ -332,7 +358,7 @@ class GameState {
                     const snap = JSON.parse(ev.target.result);
                     // Exported files embed ship system state directly
                     const pseudoInstances = snap.shipSystemState
-                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState, repairQueue: snap.repairQueue ?? [] }] }
+                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState, repairQueue: snap.repairQueue ?? [], cargo: snap.cargo }] }
                         : null;
                     GameState.restore(game, snap, pseudoInstances);
                     onDone(null);

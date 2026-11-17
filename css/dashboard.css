@@ -1270,3 +1270,15 @@
 .timeline-details { min-height: 54px; }
 .timeline-details .task-empty { padding: 0; flex: 1; }
 .timeline-here-note { font-size: 0.76rem; color: #ba68c8; font-weight: 600; }
+
+/* ── Fabrication & Cargo Hold ── */
+.repair-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.repair-btn:disabled:hover { box-shadow: none; background: rgba(255, 167, 38, 0.15); }
+.market-card .repair-btn { white-space: nowrap; flex-shrink: 0; align-self: center; }
+.cargo-box-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.cargo-box-actions .repair-btn { white-space: nowrap; }
+.cargo-box-composting .task-progress-fill { background: #8d6e63; }
+.cargo-box-ready .task-progress-fill { background: #66bb6a; }
+.task-card-fabricate .task-title::before { content: '\2692\00a0'; color: #90a4ae; }
+/* The Cargo Hold renders into one wrapper; lay it out like the overlay card itself. */
+#cargo-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; }

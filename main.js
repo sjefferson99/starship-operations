@@ -93,6 +93,7 @@ class StarshipGame {
         this._selectedCommsId = null;
         this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
         this.market           = [];   // items for sale (CommsNav owns generation + purchase rules)
+        this.cargo            = Fabrication.defaultCargo(); // supplies aboard + storage boxes (Fabrication)
         this._repairTargets   = {};   // systemKey → repair level picked on its "Repair to" chips (UI state only)
 
         // Every black water dump is detected and fined, no matter where you are.
@@ -108,6 +109,7 @@ class StarshipGame {
         this.crewScreen      = document.getElementById('crew-screen');
         this.commsNavScreen  = document.getElementById('comms-nav-screen');
         this.shipCapacityScreen = document.getElementById('ship-capacity-screen');
+        this.cargoScreen        = document.getElementById('cargo-screen');
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
@@ -117,6 +119,7 @@ class StarshipGame {
         this.crewManager    = new CrewManager(this);
         this.commsNav        = new CommsNav(this);
         this.repairManager = new RepairManager(this);
+        this.fabrication   = new Fabrication(this);
         this.systemUpdate   = new SystemUpdate(this);
         this.tour           = new Tour(this);
         this.timeline       = new Timeline(this);
@@ -214,6 +217,20 @@ class StarshipGame {
         document.getElementById('comms-nav-close-btn').addEventListener('click',   () => this._closeCommsNavScreen());
         document.getElementById('ship-capacity-btn').addEventListener('click',       () => this._openShipCapacityScreen());
         document.getElementById('ship-capacity-close-btn').addEventListener('click', () => this._closeShipCapacityScreen());
+        document.getElementById('cargo-btn').addEventListener('click',               () => this._openCargoScreen());
+        document.getElementById('cargo-close-btn').addEventListener('click',         () => this._closeCargoScreen());
+        document.getElementById('blackwater-transfer-btn').addEventListener('click', () => {
+            const box = this.fabrication.transferTarget();
+            if (box) this.fabricationAction('transfer', { boxId: box.id });
+        });
+
+        // Fabrication & cargo buttons (Cargo Hold, Work Queue, market supplies)
+        // are re-rendered constantly, so one delegated listener handles them.
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('[data-fab-action]');
+            if (!btn || btn.disabled) return;
+            this.fabricationAction(btn.dataset.fabAction, { boxId: btn.dataset.boxId, key: btn.dataset.key });
+        });
         document.getElementById('tour-btn').addEventListener('click',                () => { this.tour.setTipsEnabled(true); this.tour.start(); });
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
@@ -419,6 +436,7 @@ class StarshipGame {
         this.ventsOpen              = false;
         this.systems                = this._defaultSystems();
         this.repairQueue            = [];
+        this.cargo                  = Fabrication.defaultCargo();
         this._selectedCommsId       = null;
         // One seed drives everything: the sector layout and, on a separate
         // stream, every gameplay roll after it. Seed the RNG before the
@@ -656,13 +674,54 @@ class StarshipGame {
         const fraction = Math.min(100, pct) / 100;
         black.liquidL *= (1 - fraction);
         black.solidL  *= (1 - fraction);
-        black.current  = black.liquidL + black.solidL;
-        black.level    = (black.current / black.capacity) * 100;
-        if (black.level < this.systemUpdate.BLACK_WATER_FULL_PCT) black.exposureHours = 0;
+        this.syncBlackWaterLevel();
 
         // The fine is charged per dump regardless of size, and can put the account into debt.
         this.credits -= fine;
         this._showSaveStatus(`Fined ${fine} credits for dumping waste`, true);
+        this.updateDisplay();
+    }
+
+    // Recomputes the black water tank's total and level after liquid/solid
+    // changed outside the tick (a dump, solids moved to a storage box). A tank
+    // that's no longer full stops backing up, so exposure resets.
+    syncBlackWaterLevel() {
+        const black = this.systems.blackWater;
+        black.current = black.liquidL + black.solidL;
+        black.level   = (black.current / black.capacity) * 100;
+        if (black.level < this.systemUpdate.BLACK_WATER_FULL_PCT) black.exposureHours = 0;
+    }
+
+    // Every fabrication / cargo action the player can take (rules live in Fabrication).
+    fabricationAction(action, { boxId, key } = {}) {
+        if (!this.gameActive || this.gamePaused) return;
+        const fab = this.fabrication;
+        switch (action) {
+            case 'buy':
+                if (fab.buy(key)) this._showSaveStatus(`Bought 1 ${fab.ITEMS[key].name} for ${fab.ITEMS[key].price} credits`);
+                break;
+            case 'fabricate':
+                if (fab.queueFabrication(key)) this._showSaveStatus(`${fab.RECIPES[key].name} added to the work queue`);
+                break;
+            case 'dose':
+                fab.dose(boxId);
+                break;
+            case 'transfer': {
+                const moved = fab.transferSolids(boxId);
+                if (moved > 0) this._showSaveStatus(`Moved ${moved.toFixed(1)} L of solid waste into a storage box`);
+                break;
+            }
+            case 'seal':
+                fab.seal(boxId);
+                break;
+            case 'sell': {
+                const earned = fab.sell(boxId);
+                if (earned > 0) this._showSaveStatus(`Sold compost for ${earned} credits`);
+                break;
+            }
+            default:
+                return;
+        }
         this.updateDisplay();
     }
 
@@ -808,6 +867,7 @@ class StarshipGame {
         this._displayTransceiver();
         this._displayWaterMaker();
         this._displayShipCapacity();
+        this._displayCargo();
         this._displayEnvironment();
         this._displayLocation();
         this._displayRepairQueue();
@@ -1113,11 +1173,19 @@ class StarshipGame {
         if (maker.installed && maker.active && sys.reclaimStarved && sys.solidL > 0) {
             solidsEl.style.display = '';
             solidsEl.textContent = sys.liquidL < 0.05
-                ? `All the liquid has been reclaimed. The remaining ${sys.solidL.toFixed(1)} L is solid matter the water maker can't process — only dumping clears it.`
-                : `The water maker is reclaiming liquid as fast as it arrives. It can't process the ${sys.solidL.toFixed(1)} L of solid matter — only dumping clears that.`;
+                ? `All the liquid has been reclaimed. The remaining ${sys.solidL.toFixed(1)} L is solid matter the water maker can't process — dump it, or move it into a compost box.`
+                : `The water maker is reclaiming liquid as fast as it arrives. It can't process the ${sys.solidL.toFixed(1)} L of solid matter — dump it, or move it into a compost box.`;
         } else {
             solidsEl.style.display = 'none';
         }
+
+        // Solids go into whichever compost box is still taking them.
+        const box = this.fabrication.transferTarget();
+        const transferBtn = document.getElementById('blackwater-transfer-btn');
+        const canMove = !!box && sys.solidL >= this.fabrication.MIN_TRANSFER_L;
+        transferBtn.disabled = !canMove;
+        transferBtn.title = !box ? 'No storage box is set up for solid waste — see the Cargo Hold'
+                          : !canMove ? 'No solid waste in the tank' : '';
 
         const rateEl = document.getElementById('blackwater-rate');
         rateEl.textContent = (sys.fillRateLhr >= 0 ? '+' : '−') + Math.abs(sys.fillRateLhr).toFixed(3) + ' L/hr';
@@ -1212,9 +1280,9 @@ class StarshipGame {
     }
 
     // ── Ship capacity (mass / volume) ──────────────────────────────────────
-    // Purely informational for now — a planning panel ahead of a future
-    // purchase mechanic, decoupled from the atmosphere physics (which still
-    // uses its own fixed cabin volume in system_update.js).
+    // Buying supplies and fabricating boxes are refused when they wouldn't fit
+    // (Fabrication.spaceBlocker). Decoupled from the atmosphere physics, which
+    // uses its own fixed cabin volume in system_update.js.
 
     // Fixed mass/volume for hardware that isn't tiered via module_specs.json
     // (battery has no count of its own, tanks aren't tiered at all). Contents
@@ -1258,6 +1326,8 @@ class StarshipGame {
 
         const battery = this._batterySpec();
         items.push({ label: battery.label, count: 1, massKg: battery.massKg, volumeM3: battery.volumeM3 });
+
+        items.push(...this.fabrication.capacityItems());
 
         const tankSpecs = this._tankSpecs();
         [['fuel', tankSpecs.fuel], ['freshWater', tankSpecs.freshWater], ['blackWater', tankSpecs.blackWater]]
@@ -1624,6 +1694,97 @@ class StarshipGame {
         Overlay.hide(this.shipCapacityScreen);
     }
 
+    // ── Cargo Hold modal ────────────────────────────────────────────────────
+    // Supplies aboard and storage boxes, with what can be done with each box.
+
+    _openCargoScreen() {
+        Overlay.show(this.cargoScreen);
+        this._displayCargo();
+    }
+
+    _closeCargoScreen() {
+        Overlay.hide(this.cargoScreen);
+    }
+
+    _displayCargo() {
+        const bodyEl = document.getElementById('cargo-body');
+        if (!bodyEl || !Overlay.isOpen(this.cargoScreen)) return;
+        const fab = this.fabrication;
+
+        const supplies = Object.entries(fab.ITEMS).map(([key, item]) => `
+            <li class="task-card task-card-static" data-item-key="${key}">
+                <div class="task-info">
+                    <div class="task-title">${item.name} &times; <span class="cargo-count">${fab.count(key)}</span></div>
+                    <div class="task-meta">${item.blurb}</div>
+                </div>
+            </li>`).join('');
+
+        const boxes  = fab.boxes().map((box, i) => this._cargoBoxHtml(box, i)).join('');
+        const solidL = this.systems.blackWater.solidL;
+        const recipe = fab.RECIPES.storageBox;
+        const plural = recipe.components === 1 ? '' : 's';
+
+        const html = `
+            <h3 class="overlay-section-title">Supplies</h3>
+            <ul class="overlay-list">${supplies}</ul>
+            <h3 class="overlay-section-title">Storage Boxes</h3>
+            <p class="repair-crew-status">Solid waste in the black water tank: ${solidL.toFixed(1)} L.
+               Each box holds ${fab.BOX.capacityL} L and one kind of thing at a time.</p>
+            <ul class="overlay-list" id="cargo-box-list">${boxes ||
+                `<li class="task-empty">No storage boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${recipe.components} basic component${plural}.</li>`}</ul>`;
+        this._setHtmlIfChanged(bodyEl, html);
+    }
+
+    _cargoBoxHtml(box, i) {
+        const fab    = this.fabrication;
+        const status = fab.boxStatus(box);
+        const btn = (action, label, blocker) =>
+            `<button class="repair-btn" data-fab-action="${action}" data-box-id="${box.id}" ${blocker ? `disabled title="${blocker}"` : ''}>${label}</button>`;
+
+        let label = '', meta = '', fillPct = 0, actions = '', blocker = null;
+        switch (status) {
+            case 'empty':
+                label   = 'Empty';
+                meta    = 'Add composting agent to use it for solid waste.';
+                blocker = fab.doseBlocker(box.id);
+                actions = btn('dose', 'Add Composting Agent', blocker);
+                break;
+            case 'filling': {
+                label   = 'Compost &mdash; taking solid waste';
+                meta    = `${box.fillL.toFixed(1)} / ${fab.BOX.capacityL} L. Composting starts when it is sealed, or by itself once full.`;
+                fillPct = (box.fillL / fab.BOX.capacityL) * 100;
+                const moveBlocker = fab.transferBlocker(box.id);
+                const sealBlocker = fab.sealBlocker(box.id);
+                blocker = moveBlocker && sealBlocker ? moveBlocker : null;
+                actions = btn('transfer', 'Move Solid Waste', moveBlocker) + btn('seal', 'Seal &amp; Compost', sealBlocker);
+                break;
+            }
+            case 'composting':
+                label   = 'Composting';
+                meta    = `${box.fillL.toFixed(1)} L &middot; ${this._fmtRepairHours(fab.hoursUntilCompost(box))} to go`;
+                fillPct = (box.compostHours / fab.COMPOST_HOURS) * 100;
+                break;
+            case 'ready':
+                label   = 'Compost ready';
+                meta    = `${box.fillL.toFixed(1)} L of compost &middot; sells for ${fab.salePrice(box)} credits on a planet`;
+                fillPct = 100;
+                blocker = fab.sellBlocker(box.id);
+                actions = btn('sell', `Sell &middot; ${fab.salePrice(box)} cr`, blocker);
+                break;
+        }
+
+        return `
+            <li class="task-card task-card-static cargo-box cargo-box-${status}" data-box-id="${box.id}">
+                <div class="task-info">
+                    <div class="task-title">Storage Box ${i + 1} &mdash; ${label}</div>
+                    <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, fillPct).toFixed(1)}%"></div></div>
+                    <div class="task-meta">${meta} &middot; ${fab.boxMassKg(box).toFixed(1)} kg</div>
+                    ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                </div>
+                <div class="cargo-box-actions">${actions}</div>
+            </li>`;
+    }
+
     _selectCommsLocation(id) {
         this._selectedCommsId = id;
         this._renderCommsNavScreen();
@@ -1769,10 +1930,46 @@ class StarshipGame {
                 </li>`;
         }).join('');
 
+        const fab = this.fabrication;
+        const supplies = Object.entries(fab.ITEMS).map(([key, item]) => {
+            const blocker = fab.buyBlocker(key);
+            return `
+                <li class="market-card" data-supply-key="${key}">
+                    <div class="market-info">
+                        <div class="market-name">${item.name}</div>
+                        <div class="market-meta">${item.blurb} Aboard: ${fab.count(key)}</div>
+                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-fab-action="buy" data-key="${key}" ${blocker ? 'disabled' : ''}>Buy &middot; ${item.price} cr</button>
+                </li>`;
+        }).join('');
+
+        // Finished compost can be sold here as well as from the Cargo Hold.
+        const compostRows = fab.boxes()
+            .map((box, i) => ({ box, n: i + 1 }))
+            .filter(({ box }) => fab.boxStatus(box) === 'ready')
+            .map(({ box, n }) => {
+                const blocker = fab.sellBlocker(box.id);
+                return `
+                <li class="market-card" data-sell-box-id="${box.id}">
+                    <div class="market-info">
+                        <div class="market-name">Compost &mdash; Storage Box ${n}</div>
+                        <div class="market-meta">${box.fillL.toFixed(1)} L</div>
+                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-fab-action="sell" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>Sell &middot; ${fab.salePrice(box)} cr</button>
+                </li>`;
+            }).join('');
+
         return `
             <h4 class="comms-services-title">Items for Sale</h4>
             <p class="market-credits">Your credits: <strong>${this.credits}</strong></p>
             <ul class="market-list">${rows || '<li class="task-empty">Nothing for sale right now.</li>'}</ul>
+            <h4 class="comms-services-title">Supplies</h4>
+            <ul class="market-list">${supplies}</ul>
+            <h4 class="comms-services-title">Buying</h4>
+            <p class="market-credits">Compost &mdash; ${fab.COMPOST_PRICE_PER_L} credits a litre.</p>
+            <ul class="market-list">${compostRows || '<li class="task-empty">You have no finished compost to sell.</li>'}</ul>
             <h4 class="comms-services-title">News</h4>
             <p class="task-empty">No bulletins.</p>`;
     }
@@ -1932,8 +2129,46 @@ class StarshipGame {
         );
     }
 
+    // What engineers can make, each with what it needs.
+    _renderFabricationAvailable() {
+        const listEl = document.getElementById('fabrication-list');
+        if (!listEl) return;
+        const fab = this.fabrication;
+        const html = Object.entries(fab.RECIPES).map(([key, recipe]) => {
+            const blocker = fab.fabricateBlocker(key);
+            const plural  = recipe.components === 1 ? '' : 's';
+            return `
+                <li class="task-card task-card-static" data-recipe-key="${key}">
+                    <div class="task-info">
+                        <div class="task-title">${recipe.name}</div>
+                        <div class="task-meta">${recipe.components} basic component${plural} (${fab.count('basicComponents')} aboard) &middot; ${this._fmtRepairHours(recipe.hours)} of engineering work</div>
+                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-fab-action="fabricate" data-key="${key}" ${blocker ? 'disabled' : ''}>Fabricate</button>
+                </li>`;
+        }).join('');
+        this._setHtmlIfChanged(listEl, html);
+    }
+
+    _fabricationTaskHtml(task) {
+        const recipe = this.fabrication.RECIPES[task.recipeKey];
+        const progressPct = task.totalHours > 0
+            ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
+        return `
+            <li class="task-card task-card-fabricate" draggable="true" data-task-id="${task.id}">
+                <span class="task-drag-handle">&#10495;</span>
+                <div class="task-info">
+                    <div class="task-title">Fabricate &mdash; ${recipe ? recipe.name : task.recipeKey}</div>
+                    <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
+                    <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${this._fmtRepairHours(task.totalHours)} &middot; cancelling returns its components</div>
+                </div>
+                <button class="task-cancel-btn" data-task-id="${task.id}">Cancel</button>
+            </li>`;
+    }
+
     _displayRepairQueue() {
         this._renderRepairAvailable();
+        this._renderFabricationAvailable();
 
         const listEl = document.getElementById('repair-queue-list');
         if (!listEl || this._isDraggingTask) return; // markup not present yet, or mid-drag
@@ -1950,11 +2185,12 @@ class StarshipGame {
         }
 
         if (!this.repairQueue.length) {
-            listEl.innerHTML = '<li class="task-empty">No repair tasks queued.</li>';
+            listEl.innerHTML = '<li class="task-empty">Nothing queued.</li>';
             return;
         }
 
         listEl.innerHTML = this.repairQueue.map(task => {
+            if (task.kind === 'fabricate') return this._fabricationTaskHtml(task);
             const progressPct = task.totalHours > 0
                 ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
             const stageTop = this.repairManager._taskStage(task).toPct;

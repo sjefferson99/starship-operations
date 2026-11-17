@@ -60,6 +60,7 @@ class SystemUpdate {
         this.game.crew = this.game.crewManager.aliveCount();
         this.game.repairManager.decay(dt);
         this.game.repairManager.processQueue(dt);
+        this.game.fabrication.update(dt);
         this._updateStatuses();
 
         if (this._isGameOver()) {

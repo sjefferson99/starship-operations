@@ -111,11 +111,11 @@ class Tour {
                        <p>The quickest way to order a repair is this button on the system's own card.</p>`,
             },
             {
-                title: 'The Repair Queue',
+                title: 'The Work Queue',
                 target: '#repair-queue-btn',
-                hint: 'Click “Repair Queue”.',
+                hint: 'Click “Work Queue”.',
                 done: g => isOpen(g.taskQueueScreen),
-                body: `<p>That repair is now a task in the Repair Queue. The queue is also the second place you can order repairs from.</p>`,
+                body: `<p>That repair is now a task in the Work Queue. Engineers work through it from the top — repairs, and anything you ask them to fabricate. It's also the second place you can order repairs from.</p>`,
             },
             {
                 title: 'Queue the generator next',
@@ -232,7 +232,7 @@ class Tour {
                 title: 'Water maker fitted',
                 target: '#card-watermaker',
                 when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) < 50 && !queued(g, 'waterMaker'); },
-                body: `<p>It's aboard, in the state you bought it. Queue its repair from this card — and check the Repair Queue order, since it will wait behind anything above it.</p>`,
+                body: `<p>It's aboard, in the state you bought it. Queue its repair from this card — and check the Work Queue order, since it will wait behind anything above it.</p>`,
             },
             {
                 id: 'watermaker-ready',
@@ -256,6 +256,21 @@ class Tour {
                 when: g => !!find(g, isDestroyed),
                 body: `<p>That repair failed and the module is beyond saving. It can't be switched on or repaired again.</p>
                        <p>The local market sells salvaged replacements — a destroyed module is the one case where you can buy a spare.</p>`,
+            },
+            {
+                id: 'solids-box',
+                title: 'Solid waste has nowhere to go',
+                target: '#cargo-btn',
+                when: g => g.systems.blackWater.solidL >= 20 && !g.fabrication.boxes().length && !g.fabrication.queuedJobs().length,
+                body: `<p>The water maker can't touch the solid matter in the black water tank, so it only builds up. Instead of dumping it, you can compost it and sell it.</p>
+                       <p>Buy <strong>basic components</strong> and <strong>composting agent</strong> on the market, fabricate a storage box from the Work Queue, dose it with the agent, then move solids into it from the Black Water card.</p>`,
+            },
+            {
+                id: 'compost-ready',
+                title: 'Compost is ready',
+                target: '#cargo-btn',
+                when: g => g.fabrication.boxes().some(b => g.fabrication.boxStatus(b) === 'ready'),
+                body: `<p>A storage box has finished composting. Sell it from the <strong>Cargo Hold</strong>, or the market in Comms &amp; Nav, while you're on a planet with the local network in range — the box is then empty and ready to use again.</p>`,
             },
             {
                 id: 'gamble',

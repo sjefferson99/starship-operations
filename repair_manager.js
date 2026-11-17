@@ -2,6 +2,10 @@
 // repairs, and the crew-limited repair task queue. Physics (system_update.js)
 // only consumes efficiencyFor().
 //
+// The queue is the ship's whole work queue: fabrication jobs (fabrication.js,
+// `kind: 'fabricate'`) sit in it alongside repairs and are worked by the same
+// engineers in the same priority order.
+//
 // REPAIR STAGES are the tuning dials, set per module (and tier) in
 // data/module_specs.json as `repairStages` — an ordered list, each entry one
 // rung of the ladder from wrecked to perfect:
@@ -242,6 +246,7 @@ class RepairManager {
 
     // Hours of work left on a task across every stage up to its target.
     remainingHours(task) {
+        if (task.kind === 'fabricate') return task.hoursRemaining;
         const options = this.targetOptions(task.systemKey);
         const option  = options.find(o => o.targetPct === task.targetPct) ?? options[options.length - 1];
         return option ? option.hours : task.hoursRemaining;
@@ -256,7 +261,8 @@ class RepairManager {
     cancelTask(taskId) {
         const idx = this.game.repairQueue.findIndex(t => t.id === taskId);
         if (idx === -1) return false;
-        this.game.repairQueue.splice(idx, 1);
+        const [task] = this.game.repairQueue.splice(idx, 1);
+        if (task.kind === 'fabricate') this.game.fabrication.refund(task);
         return true;
     }
 
@@ -290,7 +296,10 @@ class RepairManager {
             while (task.status !== 'done') {
                 if (workHours < task.hoursRemaining) { task.hoursRemaining -= workHours; break; }
                 workHours -= task.hoursRemaining;
-                this._completeStage(task);
+                task.hoursRemaining = 0;
+                // Fabrication jobs share the queue and the crew; they're one stage long.
+                if (task.kind === 'fabricate') this.game.fabrication.completeTask(task);
+                else this._completeStage(task);
             }
         });
 

@@ -126,7 +126,7 @@ test.describe('transceiver', () => {
         await page.click('#comms-nav-btn');
         await expect(page.locator('.comms-location-card')).toHaveCount(1);
         await expect(page.locator('#comms-details-pane')).toContainText('Local network out of range');
-        await expect(page.locator('.market-card')).toHaveCount(0);
+        await expect(page.locator('.market-card[data-listing-id]')).toHaveCount(0);
     });
 });
 
@@ -159,7 +159,7 @@ test.describe('market and water maker', () => {
 
         await expect(page.locator('#watermaker-missing')).toBeVisible();
         await page.click('#comms-nav-btn');
-        await expect(page.locator('.market-card')).toHaveCount(7);
+        await expect(page.locator('.market-card[data-listing-id]')).toHaveCount(7);
 
         const listing = await page.evaluate(() => window.game.market.find(l => l.moduleKey === 'waterMaker'));
         await page.click(`.market-buy-btn[data-listing-id="${listing.id}"]`);
@@ -174,7 +174,7 @@ test.describe('market and water maker', () => {
         expect(state.stock).toBe(6);
 
         // A second one can't be bought while the first is fitted and intact.
-        await expect(page.locator('.market-card')).toHaveCount(6);
+        await expect(page.locator('.market-card[data-listing-id]')).toHaveCount(6);
         await expect(page.locator('.market-buy-btn:not([disabled])')).toHaveCount(0);
 
         await page.click('#comms-nav-close-btn');
@@ -195,7 +195,7 @@ test.describe('market and water maker', () => {
         // Buying changes the list (and the credits line) — a real re-render, scroll still kept.
         // (Bought through the game rather than by clicking, since clicking the top row would itself scroll the list.)
         await page.evaluate(() => window.game.buyMarketItem(window.game.market.find(l => l.moduleKey === 'waterMaker').id));
-        await expect(page.locator('.market-card')).toHaveCount(6);
+        await expect(page.locator('.market-card[data-listing-id]')).toHaveCount(6);
         expect(await services.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
     });
 

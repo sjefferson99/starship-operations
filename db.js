@@ -312,6 +312,35 @@ const MIGRATIONS = [
             ALTER TABLE saves ADD COLUMN head_checkpoint_id INTEGER;
         `);
     },
+    // Fabrication (fabrication.js): fabrication jobs share repair_tasks (a
+    // `kind` and the recipe; system_key is null for them), supplies aboard
+    // are counted per item, and storage boxes are rows of their own.
+    db => {
+        db.exec(`
+            ALTER TABLE repair_tasks ADD COLUMN kind TEXT;
+            ALTER TABLE repair_tasks ADD COLUMN recipe_key TEXT;
+
+            CREATE TABLE IF NOT EXISTS ship_cargo_items (
+                save_id INTEGER,
+                ship_id TEXT,
+                item_key TEXT,
+                quantity INTEGER,
+                PRIMARY KEY (save_id, ship_id, item_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS storage_boxes (
+                save_id INTEGER,
+                ship_id TEXT,
+                id TEXT,
+                position INTEGER,
+                kind TEXT,
+                fill_l REAL,
+                sealed INTEGER,
+                compost_hours REAL,
+                PRIMARY KEY (save_id, ship_id, id)
+            );
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -382,7 +411,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -444,6 +473,8 @@ function _composeShip(db, saveId, shipRow) {
     const fuel    = db.prepare('SELECT * FROM ship_fuel WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
     const water   = db.prepare('SELECT * FROM ship_water WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id) ?? {};
     const tasks   = db.prepare('SELECT * FROM repair_tasks WHERE save_id = ? AND ship_id = ? ORDER BY queue_position').all(saveId, shipRow.id);
+    const items   = db.prepare('SELECT * FROM ship_cargo_items WHERE save_id = ? AND ship_id = ?').all(saveId, shipRow.id);
+    const boxes   = db.prepare('SELECT * FROM storage_boxes WHERE save_id = ? AND ship_id = ? ORDER BY position').all(saveId, shipRow.id);
 
     const moduleState = key => {
         const m = byKey[key] ?? {};
@@ -484,11 +515,23 @@ function _composeShip(db, saveId, shipRow) {
                 blackExposureHours: water.black_exposure_hours,
             },
         },
-        repairQueue: tasks.map(t => ({
-            id: t.id, systemKey: t.system_key, band: t.band,
-            totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
-            targetPct: t.target_pct ?? 100, // tasks saved before repair targets existed were full repairs
-        })),
+        repairQueue: tasks.map(t => t.kind === 'fabricate'
+            ? {
+                id: t.id, kind: 'fabricate', recipeKey: t.recipe_key, band: t.band,
+                totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
+            }
+            : {
+                id: t.id, systemKey: t.system_key, band: t.band,
+                totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
+                targetPct: t.target_pct ?? 100, // tasks saved before repair targets existed were full repairs
+            }),
+        cargo: {
+            items: Object.fromEntries(items.map(r => [r.item_key, r.quantity ?? 0])),
+            boxes: boxes.map(b => ({
+                id: b.id, kind: b.kind ?? null, fillL: b.fill_l ?? 0,
+                sealed: !!b.sealed, compostHours: b.compost_hours ?? 0,
+            })),
+        },
     };
 }
 
@@ -758,9 +801,26 @@ function _saveOneShip(db, saveId, ship) {
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
     (ship.repairQueue ?? []).forEach((task, idx) => {
         db.prepare(`
-            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position, target_pct)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(task.id, saveId, ship.id, task.systemKey, task.band, task.totalHours, task.hoursRemaining, task.status, idx, task.targetPct ?? 100);
+            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position, target_pct, kind, recipe_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            task.id, saveId, ship.id, task.systemKey ?? null, task.band ?? null, task.totalHours, task.hoursRemaining, task.status, idx,
+            task.kind === 'fabricate' ? null : (task.targetPct ?? 100),
+            task.kind ?? 'repair', task.recipeKey ?? null
+        );
+    });
+
+    db.prepare('DELETE FROM ship_cargo_items WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
+    db.prepare('DELETE FROM storage_boxes WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
+    Object.entries(ship.cargo?.items ?? {}).forEach(([key, quantity]) => {
+        db.prepare('INSERT INTO ship_cargo_items (save_id, ship_id, item_key, quantity) VALUES (?, ?, ?, ?)')
+            .run(saveId, ship.id, key, quantity ?? 0);
+    });
+    (ship.cargo?.boxes ?? []).forEach((box, idx) => {
+        db.prepare(`
+            INSERT INTO storage_boxes (save_id, ship_id, id, position, kind, fill_l, sealed, compost_hours)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(saveId, ship.id, box.id, idx, box.kind ?? null, box.fillL ?? 0, box.sealed ? 1 : 0, box.compostHours ?? 0);
     });
 }
 
