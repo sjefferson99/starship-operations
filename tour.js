@@ -258,6 +258,16 @@ class Tour {
                        <p>The local market sells salvaged replacements — a destroyed module is the one case where you can buy a spare.</p>`,
             },
             {
+                // Shown once things have gone badly wrong — the moment going back is worth knowing about.
+                // The Timeline is on the pause menu, which isn't on screen, so there's nothing to spotlight.
+                id: 'timeline',
+                title: 'You can go back',
+                target: null,
+                when: g => !!find(g, isDestroyed) || g.crewManifest.some(m => m.dead || m.health < g.crewManager.UNCONSCIOUS_THRESHOLD),
+                body: `<p>If this has gone worse than you'd like, you don't have to live with it. Press <strong>Escape</strong> to pause, then open the <strong>Timeline</strong>.</p>
+                       <p>It keeps a checkpoint every game hour, plus every save. Pick one to go back to and play on from there — the line you leave is kept too, so you can always return to it.</p>`,
+            },
+            {
                 id: 'solids-box',
                 title: 'Solid waste has nowhere to go',
                 target: '#cargo-btn',
@@ -342,6 +352,27 @@ class Tour {
                 when: g => g.systems.blackWater.level >= 70,
                 body: `<p>Used water ends up here. If the tank fills completely it overflows into the cabin and makes the crew ill.</p>
                        <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims the liquid instead — though not the solid matter, which slowly builds up until it's dumped.</p>`,
+            },
+            {
+                id: 'space-low',
+                title: 'Running out of room',
+                target: '#ship-capacity-btn',
+                when: g => {
+                    const cap = g._computeShipCapacity();
+                    const cargoKg = cap.maxMassKg - cap.unladenMassKg;
+                    return cap.totalVolumeM3 > 0 && cargoKg > 0
+                        && (cap.freeVolumeM3 < cap.totalVolumeM3 * 0.15 || cap.freeMassKg < cargoKg * 0.15);
+                },
+                body: `<p>The ship is nearly full — by volume, or by the mass it's allowed to carry. Once there's no room, buying supplies and fabricating boxes are refused.</p>
+                       <p><strong>Ship Capacity</strong> shows what's taking up the space. Selling finished compost, or using up supplies, frees some.</p>`,
+            },
+            {
+                id: 'notifications',
+                title: 'Notifications',
+                target: '#notifications-pill',
+                when: g => g.notifications.list.length > 0,
+                body: `<p>Something just happened aboard. Every warning, finished repair, purchase, sale and fine is listed under <strong>Notifications</strong>, with the ship time it happened — so nothing is missed while time runs fast.</p>
+                       <p>The number is how many are listed, and the pill turns amber or red while a warning or something critical is among them. Click it to read them; delete one with its <strong>×</strong>, or <strong>Clear all</strong>.</p>`,
             },
         ];
     }

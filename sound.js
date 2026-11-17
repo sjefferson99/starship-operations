@@ -311,6 +311,8 @@ class SoundManager {
             // Compost sold: a softer rising triad than the purchase chime.
             sale:     () => [784, 988, 1175].forEach((f, i) => this._tone(f, { at: i * 0.09, dur: 0.2, gain: 0.035, type: 'triangle' })),
             fine:     () => { this._tone(392, { dur: 0.16, gain: 0.045, type: 'triangle' }); this._tone(294, { at: 0.13, dur: 0.3, gain: 0.045, type: 'triangle' }); },
+            // Compost finished: two soft, high notes.
+            ready:    () => { this._tone(1047, { dur: 0.3, gain: 0.03, type: 'triangle' }); this._tone(1319, { at: 0.16, dur: 0.45, gain: 0.03, type: 'triangle' }); },
             tip:      () => this._tone(988, { dur: 0.25, gain: 0.03, attack: 0.02, slideTo: 1175 }),
             gameOver: () => [392, 330, 262, 196].forEach((f, i) => this._tone(f, { at: i * 0.45, dur: 1.1, gain: 0.06, attack: 0.05 })),
         };
@@ -439,6 +441,8 @@ class SoundManager {
             supplies: Object.values(g.cargo?.items ?? {}).reduce((a, n) => a + n, 0),
             boxes: (g.cargo?.boxes ?? []).length,
             readyBoxes: (g.cargo?.boxes ?? []).filter(b => b.sealed && g.fabrication.boxStatus(b) === 'ready').length,
+            // Infections leave no state of their own; the Notifications list is where they show.
+            infections: (g.notifications?.list ?? []).filter(n => String(n.key).startsWith('infection:')).reduce((a, n) => a + (n.count ?? 1), 0),
             credits: g.credits,
             tip: g.tour && g.tour.tip ? g.tour.tip.id : null,
         };
@@ -463,8 +467,9 @@ class SoundManager {
         // which also keeps a ship that starts out in a bad way from chiming at you on arrival.
         if (!prev || prev.saveId !== now.saveId) return;
 
-        // Something got worse → one soft alert, rate-limited.
-        const worsened = now.ranks.reduce((worst, rank, i) => (rank > prev.ranks[i] ? Math.max(worst, rank) : worst), 0);
+        // Something got worse → one soft alert, rate-limited. An infection counts as critical.
+        let worsened = now.ranks.reduce((worst, rank, i) => (rank > prev.ranks[i] ? Math.max(worst, rank) : worst), 0);
+        if (now.infections > prev.infections) worsened = 2;
         if (worsened > 0 && Date.now() - this._lastAlertAt >= this.ALERT_MIN_GAP_MS) {
             this._lastAlertAt = Date.now();
             this.play(worsened >= 2 ? 'critical' : 'warning');
@@ -489,6 +494,7 @@ class SoundManager {
         if (now.supplies > prev.supplies && now.credits < prev.credits) this.play('purchase');
         if (now.boxes > prev.boxes) this.play('repaired'); // a fabrication job finished
         if (now.readyBoxes < prev.readyBoxes && now.credits > prev.credits) this.play('sale');
+        if (now.readyBoxes > prev.readyBoxes) this.play('ready');
         if (prev.blackWater - now.blackWater > 0.5 && now.credits < prev.credits) { this.play('flush'); this.play('fine'); }
         if (now.tip && now.tip !== prev.tip) this.play('tip');
     }
