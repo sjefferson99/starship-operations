@@ -183,32 +183,45 @@ class CommsNav {
     }
 
     // Returns null if `listing` can be bought right now, otherwise the reason not.
-    purchaseBlocker(listing) {
+    // `dest` is 'fit' (straight into the ship's slot for it) or 'store' (into
+    // an empty machine storage box, as a spare or something to repair and sell).
+    purchaseBlocker(listing, dest = 'fit') {
         const sys = this.game.systems[listing.moduleKey];
         if (!sys) return 'Not compatible with this ship';
         const loc = (this.game.commsLocations || []).find(l => l.id === listing.locationId);
         if (!this.canTradeAt(loc)) return 'You have to be on the planet to buy';
-        if (sys.installed !== false && !sys.destroyed) return 'Already fitted — only needed if yours is destroyed';
+        if (dest === 'store') {
+            const fab = this.game.fabrication;
+            if (!fab.emptyMachineBox()) return 'Needs an empty machine storage box';
+            if (this.game.credits < listing.price) return 'Not enough credits';
+            return fab.spaceBlocker(fab.moduleMassKg({ moduleKey: listing.moduleKey, tier: 1 }), 0);
+        }
+        if (sys.installed !== false && !sys.destroyed) return 'Already fitted — only needed if yours is destroyed, or to store in a machine box';
         if (this.game.credits < listing.price) return 'Not enough credits';
         return null;
     }
 
     // Fits the bought unit straight into the ship in whatever state it was
-    // sold in, replacing a destroyed one if there was one. Returns true on success.
-    purchase(listingId) {
+    // sold in, replacing a destroyed one if there was one — or, with
+    // dest 'store', puts it in an empty machine box. Returns true on success.
+    purchase(listingId, dest = 'fit') {
         const listing = (this.game.market || []).find(l => l.id === listingId);
-        if (!listing || this.purchaseBlocker(listing)) return false;
+        if (!listing || this.purchaseBlocker(listing, dest)) return false;
 
-        const sys = this.game.systems[listing.moduleKey];
-        sys.installed  = true;
-        sys.destroyed  = false;
-        sys.juryRigged = false;
-        sys.active     = false;
-        sys.repairPct  = listing.repairPct;
+        if (dest === 'store') {
+            this.game.fabrication.storeModule({ moduleKey: listing.moduleKey, tier: 1, repairPct: listing.repairPct });
+        } else {
+            const sys = this.game.systems[listing.moduleKey];
+            sys.installed  = true;
+            sys.destroyed  = false;
+            sys.juryRigged = false;
+            sys.active     = false;
+            sys.repairPct  = listing.repairPct;
+            this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== listing.moduleKey);
+        }
 
         this.game.credits -= listing.price;
         this.game.market = this.game.market.filter(l => l.id !== listingId);
-        this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== listing.moduleKey);
         return true;
     }
 }

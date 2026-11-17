@@ -73,7 +73,7 @@ test.describe('db.js', () => {
         expect(result.world).toEqual({
             version: '2.0.0', savedAt: result.world.savedAt,
             world: { gameTime: 12345, credits: 980, gameSpeed: 10 },
-            crew: { count: 1, members: [] }, comms: { seed: null, locations: [], market: [] }, rng: { state: 3735928559 },
+            crew: { count: 1, members: [] }, comms: { seed: null, locations: [], market: [], resale: {} }, rng: { state: 3735928559 },
             shipInstanceId: 'player-ship-1',
             environment: { inBreathableAtmosphere: true, ventsOpen: false },
             notifications: [],

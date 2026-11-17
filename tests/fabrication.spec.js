@@ -42,6 +42,7 @@ test.describe('fabrication', () => {
         const result = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
             const noParts = fab.fabricateBlocker('storageBox');
+            g.cargo.boxes = []; // the new ship's food box isn't part of this test
             g.cargo.items.basicComponents = 2;
 
             const cancelled = fab.queueFabrication('storageBox');
@@ -99,6 +100,7 @@ test.describe('fabrication', () => {
 
         const r = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
+            g.cargo.boxes = []; // the new ship's food box isn't part of this test
             g.cargo.boxes.push({ id: 'box-test', kind: null, fillL: 0, sealed: false, compostHours: 0 });
             g.cargo.items.compostingAgent = 1;
             const black = g.systems.blackWater;
@@ -153,6 +155,7 @@ test.describe('fabrication', () => {
 
         await page.evaluate(() => {
             const g = window.game;
+            g.cargo.boxes = [];
             g.cargo.boxes.push({ id: 'box-a', kind: 'compost', fillL: 45, sealed: false, compostHours: 0 });
             g.systems.blackWater.solidL = 20; g.syncBlackWaterLevel();
             g.updateDisplay();
@@ -172,6 +175,7 @@ test.describe('fabrication', () => {
         await page.evaluate(() => {
             const g = window.game;
             g.credits = 0;
+            g.cargo.boxes = [];
             g.cargo.boxes.push({ id: 'box-m', kind: 'compost', fillL: 50, sealed: true, compostHours: 72 });
             g.cargo.boxes.push({ id: 'box-c', kind: 'compost', fillL: 20, sealed: true, compostHours: 10 });
         });
@@ -220,7 +224,7 @@ test.describe('fabrication', () => {
             const g = window.game;
             g.cargo.items.basicComponents = 3;
             g.cargo.items.compostingAgent = 2;
-            g.cargo.boxes.push({ id: 'box-p', kind: 'compost', fillL: 12.5, sealed: true, compostHours: 10 });
+            g.cargo.boxes.push({ id: 'box-p', size: 'standard', kind: 'compost', fillL: 12.5, sealed: true, compostHours: 10, module: null });
             g.fabrication.queueFabrication('storageBox');
             await g.saveGame();
             return { cargo: JSON.parse(JSON.stringify(g.cargo)), fab: g.repairQueue.filter(t => t.kind === 'fabricate').map(t => ({ ...t })) };

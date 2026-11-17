@@ -25,6 +25,12 @@ class CrewManager {
         this.WATER_RATION_GRACE_HOURS    = 24;
         this.WATER_RATION_HEALTH_FRACTION = 0.10;
 
+        // Running out of food: people last a good while without it. Nothing
+        // for the first 3 days, then a steady decline that takes a member from
+        // full health to 0 over the next 10.
+        this.FOOD_GRACE_HOURS            = 72;
+        this.FOOD_DEPRIVATION_PCT_PER_HR = 100 / (10 * 24);
+
         // Overwork, driven by how many hours a day a member is *scheduled* on
         // duty (not by whether there happened to be a task to do):
         //   up to 8h   — no effect.
@@ -233,6 +239,11 @@ class CrewManager {
             } else if (fresh.rationing && (fresh.rationHours || 0) > this.WATER_RATION_GRACE_HOURS) {
                 items.push({ label: 'Water rationing strain', ratePctPerHr: this.WATER_RATION_HEALTH_FRACTION * this.WATER_DEPRIVATION_PCT_PER_HR });
             }
+        }
+
+        const food = this.game.systems.food;
+        if (food && (food.starvedHours || 0) > this.FOOD_GRACE_HOURS) {
+            items.push({ label: 'Starvation (no food aboard)', ratePctPerHr: this.FOOD_DEPRIVATION_PCT_PER_HR });
         }
 
         const sewageRate = this._sewageRatePctPerHr();

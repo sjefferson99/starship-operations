@@ -64,6 +64,8 @@ test.describe('notifications', () => {
         await step(() => { window.game.crewManifest[0].health = 10; });
         await step(() => {
             const g = window.game;
+            g.cargo.boxes = []; // the new ship's food box: eaten from, but not the subject here
+            g.notifications._prev = g.notifications._state();
             g.cargo.boxes.push({ id: 'box-t', kind: 'compost', fillL: 30, sealed: false, compostHours: 0 });
         });
         await step(() => { window.game.cargo.boxes[0].sealed = true; });
@@ -102,6 +104,7 @@ test.describe('notifications', () => {
 
         await page.evaluate(() => {
             const g = window.game;
+            g.cargo.boxes = [];
             g.cargo.boxes.push({ id: 'box-r', kind: 'compost', fillL: 30, sealed: true, compostHours: 0 });
             window.sound._poll();
             window.sound.log.length = 0;

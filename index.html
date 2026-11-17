@@ -423,6 +423,38 @@
                     </div>
                 </div>
 
+                <!-- Food Stores: rations kept in storage boxes (fabrication.js) -->
+                <div class="system-card" id="card-food">
+                    <div class="card-header">
+                        <h3>Food Stores</h3>
+                        <span class="status-badge badge-normal" id="food-status-badge">NOMINAL</span>
+                    </div>
+                    <div class="main-value">
+                        <span class="value-large" id="food-rations">0.0</span>
+                        <span class="value-label">rations aboard, in <span id="food-boxes">0 boxes</span></span>
+                    </div>
+                    <div class="rate-panel">
+                        <div class="rate-row">
+                            <span class="rate-label">Crew eating:</span>
+                            <span class="rate-value" id="food-rate">&#8722;0.0 rations/day</span>
+                        </div>
+                        <div class="rate-row">
+                            <span class="rate-label">Box space for more:</span>
+                            <span class="rate-value" id="food-room">0 rations</span>
+                        </div>
+                        <div class="rate-row rate-net-row">
+                            <span class="rate-label">Est. time to empty:</span>
+                            <span class="rate-value" id="food-runtime">&mdash;</span>
+                        </div>
+                        <div class="rate-row" id="food-starving-row" style="display:none">
+                            <span class="rate-value rate-neg" id="food-starving"></span>
+                        </div>
+                    </div>
+                    <div class="system-info">
+                        <span id="food-info">Buy rations on the market. Eating produces the black water tank's solid waste.</span>
+                    </div>
+                </div>
+
                 <!-- Black Water Tank -->
                 <div class="system-card" id="card-blackwater">
                     <div class="card-header">

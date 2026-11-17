@@ -35,6 +35,14 @@ class SystemUpdate {
         // than gradually — see main.js's toggleWaterRationing().
         this.WATER_RATION_RESET_L_PER_CREW = 50;
 
+        // Food: what's eaten ends up in the black water tank as solid waste
+        // (litres per ration eaten). Rations themselves live in storage boxes
+        // (fabrication.js). Status bands are days of food left at the current
+        // rate of eating.
+        this.SOLID_WASTE_L_PER_RATION = 1.5;
+        this.FOOD_WARNING_DAYS        = 3;
+        this.FOOD_CRITICAL_DAYS       = 1;
+
         // The black water tank counts as "full" (waste backing up into the
         // cabin — see CrewManager's sewage exposure) from this level up.
         this.BLACK_WATER_FULL_PCT = 99.9;
@@ -54,6 +62,7 @@ class SystemUpdate {
         this._updateO2(dt);
         this._updateCO2(dt);
         this._updateTransceiver();
+        this._updateFood(dt);
         this._updateWater(dt);
         this._updatePowerAndFuel(dt);
         this.game.crewManager.update(dt);
@@ -284,6 +293,31 @@ class SystemUpdate {
         fuel.consumeRateLhr = fuelBurnLhr;
     }
 
+    // The crew eat from the food boxes. Running out starts the starvation
+    // clock (CrewManager's hunger effects); any food at all stops it. What was
+    // eaten becomes this tick's solid waste, which _updateWater puts in the
+    // black water tank. Eating is clamped to what's aboard, so one huge tick
+    // can't eat food that isn't there.
+    _updateFood(dt) {
+        const food  = this.game.systems.food;
+        const fab   = this.game.fabrication;
+        const hours = dt / 3600;
+        const crew  = this.game.crew;
+
+        const perDay = fab.RATIONS_PER_CREW_DAY * crew;
+        const wanted = perDay * hours / 24;
+        const eaten  = fab.eat(wanted);
+
+        food.eatRatePerDay = perDay;
+        food.rations       = fab.rationsAboard();
+        food.daysLeft      = perDay > 0 ? food.rations / perDay : Infinity;
+        // Hungry for the part of the tick there was nothing left to eat.
+        const unfedHours   = wanted > 0 ? hours * (1 - eaten / wanted) : 0;
+        food.starvedHours  = unfedHours > 1e-9 ? (food.starvedHours || 0) + unfedHours : 0;
+        this._solidWasteL  = eaten * this.SOLID_WASTE_L_PER_RATION;
+        food.solidRateLhr  = perDay / 24 * this.SOLID_WASTE_L_PER_RATION;
+    }
+
     _updateWater(dt) {
         const fresh = this.game.systems.freshWater;
         const black = this.game.systems.blackWater;
@@ -300,11 +334,12 @@ class SystemUpdate {
         fresh.consumeRateLhr = consumeLhr;
 
         // 90% of the fresh water actually drawn becomes black-water liquid (10%
-        // lost to drinking/showering/evaporation); that liquid then gains 20%
-        // extra volume from solid waste, tracked separately for the dashboard
-        // split and for the water maker's reclamation below.
+        // lost to drinking/showering/evaporation). Solid waste comes from the
+        // food eaten this tick (_updateFood), tracked separately for the
+        // dashboard split and because the water maker can only reclaim liquid.
         const liquidProduced = consumed * 0.9;
-        const solidProduced  = liquidProduced * 0.2;
+        const solidProduced  = this._solidWasteL || 0;
+        this._solidWasteL    = 0;
         const totalProduced  = liquidProduced + solidProduced;
         const capacityLeft   = Math.max(0, black.capacity - (black.liquidL + black.solidL));
         const overflowRatio  = totalProduced > 0 ? Math.min(1, capacityLeft / totalProduced) : 1;
@@ -329,7 +364,7 @@ class SystemUpdate {
         // Net of what the water maker took back out this tick, so the dashboard's
         // fill rate goes negative when reclamation is winning.
         black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
-        black.solidRateLhr  = black.liquidRateLhr * 0.2;
+        black.solidRateLhr  = this.game.systems.food?.solidRateLhr ?? 0;
         black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr - (black.reclaimRateLhr || 0);
     }
 
@@ -432,6 +467,14 @@ class SystemUpdate {
             blackWater.status = 'Warning';
         } else {
             blackWater.status = 'Normal';
+        }
+
+        // Food: by days left at the current rate of eating.
+        const food = this.game.systems.food;
+        if (food) {
+            const days = food.daysLeft ?? Infinity;
+            food.status = (food.rations ?? 0) <= 0 || days < this.FOOD_CRITICAL_DAYS ? 'Critical'
+                        : days < this.FOOD_WARNING_DAYS ? 'Warning' : 'Normal';
         }
 
         // Transceiver: fine once it can reach the local network, otherwise a warning.

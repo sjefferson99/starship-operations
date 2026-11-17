@@ -36,7 +36,7 @@ changing state shape, grep for every reader, don't assume one file owns a field.
 **The tick loop is the heart of the simulation** (`main.js`'s `_startTimer`): every real second,
 if not paused, `gameTime` advances by `gameSpeed` (1/10/100/1000×) and that same value is passed
 as `dt` (game-seconds elapsed) into `SystemUpdate.update(dt)`, which runs O2 → CO2 →
-transceiver → water (incl. water maker) → power/fuel → crew health → repair decay → work-queue
+transceiver → food (eating) → water (incl. water maker) → power/fuel → crew health → repair decay → work-queue
 processing → composting → status thresholds, in that fixed order (preceded by the power-budget calculation
 described below), then `main.js` does a full imperative DOM re-render (no diffing). Because `dt` can be
 as large as 1000 at high speed, any new per-tick calculation needs to be safe against one huge
@@ -62,7 +62,8 @@ contacts once range covers their distance. Visibility is derived live, never rem
 unpowered or switched-off transceiver shows nothing but the ship's own position. The **market**
 (`game.market`, seeded alongside the sector in `CommsNav.generate`) is a list of salvaged modules;
 `CommsNav.purchaseBlocker()`/`purchase()` hold every buying rule (on-planet only, local network in
-range, enough credits, and a module slot that is empty or destroyed). The **water maker** reclaims
+range, enough credits, and either a module slot that is empty or destroyed — `dest: 'fit'` — or an
+empty machine storage box — `dest: 'store'`). The **water maker** reclaims
 black-water liquid into fresh water first and, in a breathable atmosphere, makes up the rest from
 outside air.
 
@@ -120,6 +121,29 @@ starts `COMPOST_HOURS` of composting, and finished compost sells on a planet, wh
 Boxes, supplies and boxes being made count toward `_computeShipCapacity()`, and buying or fabricating is
 refused when it wouldn't fit (`Fabrication.spaceBlocker`). Persisted in `ship_cargo_items` and
 `storage_boxes`; `repair_tasks` gained `kind`/`recipe_key`.
+
+**Food is a box kind, and the only source of solid waste.** Rations (`RATIONS_PER_CREW_DAY` = 3 per crew member) are
+bought by the case (`Fabrication.FOOD`, not in `ITEMS`) and stored as `kind: 'food'` boxes, `fillL`
+counting rations: they top up food boxes, then claim empty standard boxes, and are refused with no
+room. `SystemUpdate._updateFood` eats from the emptiest food box (a box eaten empty goes back to
+unassigned) and turns what was eaten into `blackWater.solidL` (`SOLID_WASTE_L_PER_RATION`); water
+use now only makes the liquid. `systems.food` holds the derived reading plus `starvedHours`, which
+drives `CrewManager`'s starvation impact after `FOOD_GRACE_HOURS` (persisted in `ship_food`). A new
+ship starts with one box of `STARTER_RATIONS`, and so does a payload from before food existed
+(`GameState._hasFoodState`).
+
+**Machine storage boxes** (`size: 'machine'`, the `machineBox` recipe: 2 components, 10 h) each hold
+one `module` record (`moduleKey`, `tier`, `repairPct`, `juryRigged`, `destroyed`) that needs no
+dashboard slot and doesn't wear. RepairManager treats it as the **unit key** `box:<boxId>`: repair
+tasks for it carry that as their `systemKey`, so code that looks for a fitted module's tasks by key
+never matches them (`repairManager.isStoredUnit()`, `storedKeys()`). `Fabrication.swap` exchanges it
+with the fitted unit (queued repairs follow their unit; `swapCount` lets the observers tell a swap
+from a repair) and `sellModule` sells it on a planet for `moduleSaleValue` (40–400 by condition,
+less if jury-rigged, scrap if destroyed) — the buy-salvage, repair, sell loop. Each sale adds to
+`game.moduleResale[moduleKey]`, which cuts the next sale of that type by `MODULE_RESALE_DROP` per
+recent sale and wears off over `MODULE_RESALE_RECOVERY_DAYS` (persisted in `market_resale`). The
+market itself never restocks: a bought listing is gone. Scarcity dials are `CommsNav.MARKET_STOCK`
+counts and the price/condition ranges beside it; repair time is `repairStages` in `module_specs.json`.
 
 **Crew health lives in `crew_manager.js`** (`CrewManager`), separate from `data/crew_manifest.json`
 (the static, read-only template of `{id, classes, shifts}`). `this.crewManifest` on `StarshipGame`

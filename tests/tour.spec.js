@@ -41,6 +41,9 @@ test.describe('guided tour', () => {
         await expect(title).toHaveText('Ration the water');
         await page.click('#water-ration-toggle');
 
+        await expect(title).toHaveText('Food');
+        await page.click('#tour-next-btn');
+
         await expect(title).toHaveText('No power, no systems');
         await page.click('#tour-next-btn');
 

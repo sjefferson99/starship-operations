@@ -94,6 +94,7 @@ class StarshipGame {
         this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
         this.market           = [];   // items for sale (CommsNav owns generation + purchase rules)
         this.cargo            = Fabrication.defaultCargo(); // supplies aboard + storage boxes (Fabrication)
+        this.moduleResale     = {};   // moduleKey → recent sales, which lower resale prices (Fabrication)
         this._repairTargets   = {};   // systemKey → repair level picked on its "Repair to" chips (UI state only)
 
         // Every black water dump is detected and fined, no matter where you are.
@@ -195,6 +196,13 @@ class StarshipGame {
                 liquidRateLhr: 0, solidRateLhr: 0, fillRateLhr: 0,
                 exposureHours: 0, // how long the tank has been full and backing up into the cabin
             },
+            // Food rations live in storage boxes (fabrication.js); this is what
+            // the tick works out from them, plus how long the crew have gone hungry.
+            food: {
+                status: 'Normal',
+                rations: 0, eatRatePerDay: 0, daysLeft: Infinity, solidRateLhr: 0,
+                starvedHours: 0,
+            },
         };
     }
 
@@ -231,6 +239,12 @@ class StarshipGame {
             const btn = e.target.closest('[data-fab-action]');
             if (!btn || btn.disabled) return;
             this.fabricationAction(btn.dataset.fabAction, { boxId: btn.dataset.boxId, key: btn.dataset.key });
+        });
+        // Market rows' "Buy & Store" buttons (into a machine box) — re-rendered like the rest.
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('.market-store-btn');
+            if (!btn || btn.disabled) return;
+            this.buyMarketItem(btn.dataset.listingId, 'store');
         });
         document.getElementById('tour-btn').addEventListener('click',                () => { this.tour.setTipsEnabled(true); this.tour.start(); });
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
@@ -440,6 +454,8 @@ class StarshipGame {
         this.systems                = this._defaultSystems();
         this.repairQueue            = [];
         this.cargo                  = Fabrication.defaultCargo();
+        this.fabrication.addStarterFood();
+        this.moduleResale           = {};
         this._selectedCommsId       = null;
         // One seed drives everything: the sector layout and, on a separate
         // stream, every gameplay roll after it. Seed the RNG before the
@@ -723,6 +739,26 @@ class StarshipGame {
                 if (earned > 0) this._showSaveStatus(`Sold compost for ${earned} credits`);
                 break;
             }
+            case 'buyFood':
+                if (fab.buyFood()) this._showSaveStatus(`Bought ${fab.FOOD.caseSize} ${fab.FOOD.name.toLowerCase()} for ${fab.FOOD.price} credits`);
+                break;
+            case 'repairStored':
+                this.startRepair(`box:${boxId}`);
+                return; // startRepair redraws
+            case 'swap': {
+                const name = fab.moduleName(fab.storedModule(boxId)?.moduleKey);
+                if (fab.swap(boxId)) {
+                    delete this._repairTargets[`box:${boxId}`];
+                    this._showSaveStatus(`${name} fitted from the machine box`);
+                }
+                break;
+            }
+            case 'sellModule': {
+                const name = fab.moduleName(fab.storedModule(boxId)?.moduleKey);
+                const earned = fab.sellModule(boxId);
+                if (earned > 0) this._showSaveStatus(`Sold ${name} for ${earned} credits`);
+                break;
+            }
             default:
                 return;
         }
@@ -730,11 +766,11 @@ class StarshipGame {
     }
 
     // Buy a market listing (rules live in CommsNav.purchaseBlocker/purchase).
-    buyMarketItem(listingId) {
+    buyMarketItem(listingId, dest = 'fit') {
         if (!this.gameActive || this.gamePaused) return;
         const listing = (this.market || []).find(l => l.id === listingId);
-        if (!listing || !this.commsNav.purchase(listingId)) return;
-        this._showSaveStatus(`Bought ${listing.name} for ${listing.price} credits`);
+        if (!listing || !this.commsNav.purchase(listingId, dest)) return;
+        this._showSaveStatus(`Bought ${listing.name} for ${listing.price} credits${dest === 'store' ? ' — stored in a machine box' : ''}`);
         this.updateDisplay();
     }
 
@@ -867,6 +903,7 @@ class StarshipGame {
         this._displayPower();
         this._displayFuel();
         this._displayFreshWater();
+        this._displayFood();
         this._displayBlackWater();
         this._displayTransceiver();
         this._displayWaterMaker();
@@ -1160,6 +1197,43 @@ class StarshipGame {
                 : 'Not sustainable — and the tank would be empty straight away.';
             verdictEl.className   = 'ration-preview-verdict verdict-bad';
         }
+    }
+
+    // Food Stores card. Rations are read live from the food boxes; the eating
+    // rate and the starvation clock come from the last tick (SystemUpdate._updateFood).
+    _displayFood() {
+        if (!document.getElementById('card-food')) return;
+        const food    = this.systems.food;
+        const fab     = this.fabrication;
+        const rations = fab.rationsAboard();
+        const nBoxes  = fab.foodBoxes().length;
+        const perDay  = fab.RATIONS_PER_CREW_DAY * this.crew;
+
+        document.getElementById('food-rations').textContent = rations.toFixed(1);
+        document.getElementById('food-boxes').textContent   = `${nBoxes} box${nBoxes === 1 ? '' : 'es'}`;
+        document.getElementById('food-rate').textContent    = '−' + perDay.toFixed(1) + ' rations/day';
+        document.getElementById('food-room').textContent    = Math.floor(fab.foodRoom()) + ' rations';
+
+        const rtEl = document.getElementById('food-runtime');
+        if (rations <= 0) rtEl.textContent = perDay > 0 ? 'EMPTY' : '—';
+        else if (perDay <= 0) rtEl.textContent = '—';
+        else {
+            const days = rations / perDay;
+            rtEl.textContent = days >= 2 ? `${days.toFixed(1)} days` : `${Math.round(days * 24)} hrs`;
+        }
+
+        const starvingRow = document.getElementById('food-starving-row');
+        const starved = food.starvedHours ?? 0;
+        starvingRow.style.display = starved > 0 ? '' : 'none';
+        if (starved > 0) {
+            const grace = this.crewManager.FOOD_GRACE_HOURS;
+            document.getElementById('food-starving').textContent = starved < grace
+                ? `No food for ${Math.floor(starved)}h — health suffers after ${grace}h`
+                : `Starving — no food for ${Math.floor(starved)}h`;
+        }
+
+        this._setBadge('food-status-badge', food.status);
+        document.getElementById('card-food').className = 'system-card' + this._cardMod(food.status);
     }
 
     _displayBlackWater() {
@@ -1725,23 +1799,30 @@ class StarshipGame {
                 </div>
             </li>`).join('');
 
-        const boxes  = fab.boxes().map((box, i) => this._cargoBoxHtml(box, i)).join('');
-        const solidL = this.systems.blackWater.solidL;
-        const recipe = fab.RECIPES.storageBox;
-        const plural = recipe.components === 1 ? '' : 's';
+        const boxes    = fab.standardBoxes().map(box => this._cargoBoxHtml(box)).join('');
+        const machines = fab.machineBoxes().map(box => this._machineBoxHtml(box)).join('');
+        const solidL   = this.systems.blackWater.solidL;
+        const recipe   = fab.RECIPES.storageBox;
+        const plural   = recipe.components === 1 ? '' : 's';
+        const machineRecipe = fab.RECIPES.machineBox;
 
         const html = `
             <h3 class="overlay-section-title">Supplies</h3>
             <ul class="overlay-list">${supplies}</ul>
             <h3 class="overlay-section-title">Storage Boxes</h3>
-            <p class="repair-crew-status">Solid waste in the black water tank: ${solidL.toFixed(1)} L.
-               Each box holds ${fab.BOX.capacityL} L and one kind of thing at a time.</p>
+            <p class="repair-crew-status">Food aboard: ${fab.rationsAboard().toFixed(1)} rations. Solid waste in the black water tank: ${solidL.toFixed(1)} L.
+               Each box holds ${fab.BOX.capacityL} L &mdash; or ${fab.BOX.capacityL} rations &mdash; and one kind of thing at a time.</p>
             <ul class="overlay-list" id="cargo-box-list">${boxes ||
-                `<li class="task-empty">No storage boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${recipe.components} basic component${plural}.</li>`}</ul>`;
+                `<li class="task-empty">No storage boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${recipe.components} basic component${plural}.</li>`}</ul>
+            <h3 class="overlay-section-title">Machine Boxes</h3>
+            <p class="repair-crew-status">Each holds one piece of equipment, switched off, without it taking a dashboard slot:
+               a spare to swap in, or salvage to repair and sell at a profit.</p>
+            <ul class="overlay-list" id="cargo-machine-list">${machines ||
+                `<li class="task-empty">No machine boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${machineRecipe.components} basic components and ${this._fmtRepairHours(machineRecipe.hours)}.</li>`}</ul>`;
         this._setHtmlIfChanged(bodyEl, html);
     }
 
-    _cargoBoxHtml(box, i) {
+    _cargoBoxHtml(box) {
         const fab    = this.fabrication;
         const status = fab.boxStatus(box);
         const btn = (action, label, blocker) =>
@@ -1751,9 +1832,14 @@ class StarshipGame {
         switch (status) {
             case 'empty':
                 label   = 'Empty';
-                meta    = 'Add composting agent to use it for solid waste.';
+                meta    = 'Food you buy goes into empty boxes, or add composting agent to use it for solid waste.';
                 blocker = fab.doseBlocker(box.id);
                 actions = btn('dose', 'Add Composting Agent', blocker);
+                break;
+            case 'food':
+                label   = 'Food';
+                meta    = `${box.fillL.toFixed(1)} / ${fab.BOX.capacityL} rations. The crew eat from the emptiest food box first.`;
+                fillPct = (box.fillL / fab.BOX.capacityL) * 100;
                 break;
             case 'filling': {
                 label   = 'Compost &mdash; taking solid waste';
@@ -1782,9 +1868,61 @@ class StarshipGame {
         return `
             <li class="task-card task-card-static cargo-box cargo-box-${status}" data-box-id="${box.id}">
                 <div class="task-info">
-                    <div class="task-title">Storage Box ${i + 1} &mdash; ${label}</div>
+                    <div class="task-title">${fab.boxLabel(box)} &mdash; ${label}</div>
                     <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, fillPct).toFixed(1)}%"></div></div>
                     <div class="task-meta">${meta} &middot; ${fab.boxMassKg(box).toFixed(1)} kg</div>
+                    ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                </div>
+                <div class="cargo-box-actions">${actions}</div>
+            </li>`;
+    }
+
+    _machineBoxHtml(box) {
+        const fab = this.fabrication;
+        const btn = (action, label, blocker) =>
+            `<button class="repair-btn" data-fab-action="${action}" data-box-id="${box.id}" ${blocker ? `disabled title="${blocker}"` : ''}>${label}</button>`;
+        const mod = box.module;
+
+        let title, meta, actions = '', blocker = null, fillPct = 0, chips = '';
+        if (!mod) {
+            title = `${fab.boxLabel(box)} &mdash; Empty`;
+            meta  = 'Buy a salvaged module on the market with &ldquo;Buy &amp; Store&rdquo; to keep it here.';
+        } else {
+            const unit = `box:${box.id}`;
+            const name = fab.moduleName(mod.moduleKey);
+            const pct  = Math.round(mod.repairPct ?? 100);
+            const condition = mod.destroyed ? 'destroyed' : `${pct}%${mod.juryRigged ? ', jury-rigged' : ''}`;
+            const task = this.repairQueue.find(t => t.systemKey === unit);
+            const fitted = this.systems[mod.moduleKey];
+            const swapLabel = fitted && fitted.installed !== false ? 'Swap with Fitted' : 'Fit';
+
+            title   = `${fab.boxLabel(box)} &mdash; ${name} (${condition})`;
+            fillPct = mod.destroyed ? 0 : (mod.repairPct ?? 100);
+            meta    = `Worth ${fab.moduleSaleValue(mod)} credits on a planet` +
+                      (task ? ` &middot; repair queued: ${task.band} &rarr; ${task.targetPct}%` : '');
+
+            let repairBtn = '';
+            if (!task && this.repairManager.canRepair(unit)) {
+                const info = this.repairManager.describeRepair(unit, this._repairTargets[unit]);
+                if (info) {
+                    chips = this._repairTargetChips(unit, info.targetPct);
+                    repairBtn = btn('repairStored', `${this._repairLabel(info)}`, null);
+                }
+            }
+            const swapBlocker = fab.swapBlocker(box.id);
+            const sellBlocker = fab.sellModuleBlocker(box.id);
+            blocker = sellBlocker && swapBlocker ? swapBlocker : null;
+            actions = repairBtn + btn('swap', swapLabel, swapBlocker) +
+                      btn('sellModule', `Sell &middot; ${fab.moduleSaleValue(mod)} cr`, sellBlocker);
+        }
+
+        return `
+            <li class="task-card task-card-static cargo-box cargo-box-machine" data-box-id="${box.id}">
+                <div class="task-info">
+                    <div class="task-title">${title}</div>
+                    <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, fillPct).toFixed(1)}%"></div></div>
+                    <div class="task-meta">${meta} &middot; ${fab.boxMassKg(box).toFixed(1)} kg</div>
+                    ${chips}
                     ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                 </div>
                 <div class="cargo-box-actions">${actions}</div>
@@ -1921,22 +2059,33 @@ class StarshipGame {
                     the local market and news need ${this.commsNav.LOCAL_DETAILS_RANGE_LY} ly. Repair the transceiver and switch it on.</p>`;
         }
 
+        const fab = this.fabrication;
+        const hasMachineBox = fab.machineBoxes().length > 0;
         const listings = this.commsNav.listingsAt(loc);
         const rows = listings.map(l => {
-            const blocker = this.commsNav.purchaseBlocker(l);
+            const blocker      = this.commsNav.purchaseBlocker(l, 'fit');
+            const storeBlocker = hasMachineBox ? this.commsNav.purchaseBlocker(l, 'store') : null;
+            // With a machine box, only say why when neither way of buying works.
+            const shown   = hasMachineBox ? (blocker && storeBlocker ? storeBlocker : null) : blocker;
             const gamble  = l.repairPct < 20 ? ' &middot; <span class="market-risk">repair is a gamble</span>' : '';
+            const worth   = fab.moduleSaleValue({ moduleKey: l.moduleKey, repairPct: 100 });
+            const storeBtn = hasMachineBox
+                ? `<button class="repair-btn market-store-btn" data-listing-id="${l.id}" ${storeBlocker ? `disabled title="${storeBlocker}"` : ''}>Buy &amp; Store &middot; ${l.price} cr</button>`
+                : '';
             return `
                 <li class="market-card" data-listing-id="${l.id}">
                     <div class="market-info">
                         <div class="market-name">${this._escapeHtml(l.name)}</div>
-                        <div class="market-meta">Condition ${Math.round(l.repairPct)}%${gamble}</div>
-                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                        <div class="market-meta">Condition ${Math.round(l.repairPct)}%${gamble} &middot; sells for ${worth} cr fully repaired</div>
+                        ${shown ? `<div class="market-blocker">${shown}</div>` : ''}
                     </div>
-                    <button class="repair-btn market-buy-btn" data-listing-id="${l.id}" ${blocker ? 'disabled' : ''}>Buy &middot; ${l.price} cr</button>
+                    <div class="market-buttons">
+                        <button class="repair-btn market-buy-btn" data-listing-id="${l.id}" ${blocker ? `disabled title="${blocker}"` : ''}>Buy &amp; Fit &middot; ${l.price} cr</button>
+                        ${storeBtn}
+                    </div>
                 </li>`;
         }).join('');
 
-        const fab = this.fabrication;
         const supplies = Object.entries(fab.ITEMS).map(([key, item]) => {
             const blocker = fab.buyBlocker(key);
             return `
@@ -1950,6 +2099,33 @@ class StarshipGame {
                 </li>`;
         }).join('');
 
+        const foodBlocker = fab.buyFoodBlocker();
+        const foodRow = `
+                <li class="market-card" data-supply-key="food">
+                    <div class="market-info">
+                        <div class="market-name">${fab.FOOD.name}</div>
+                        <div class="market-meta">${fab.FOOD.blurb} Aboard: ${fab.rationsAboard().toFixed(1)} &middot; box space for ${Math.floor(fab.foodRoom())}</div>
+                        ${foodBlocker ? `<div class="market-blocker">${foodBlocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-fab-action="buyFood" ${foodBlocker ? 'disabled' : ''}>Buy &middot; ${fab.FOOD.price} cr</button>
+                </li>`;
+
+        // Stored equipment can be sold here as well as from the Cargo Hold.
+        const equipmentRows = fab.machineBoxes().filter(b => b.module).map(box => {
+            const blocker = fab.sellModuleBlocker(box.id);
+            const m = box.module;
+            const condition = m.destroyed ? 'destroyed &mdash; scrap' : `condition ${Math.round(m.repairPct ?? 100)}%${m.juryRigged ? ', jury-rigged' : ''}`;
+            return `
+                <li class="market-card" data-sell-module-box-id="${box.id}">
+                    <div class="market-info">
+                        <div class="market-name">${fab.moduleName(m.moduleKey)} &mdash; ${fab.boxLabel(box)}</div>
+                        <div class="market-meta">${condition}</div>
+                        ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-fab-action="sellModule" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>Sell &middot; ${fab.moduleSaleValue(m)} cr</button>
+                </li>`;
+        }).join('');
+
         // Finished compost can be sold here as well as from the Cargo Hold.
         const compostRows = fab.boxes()
             .map((box, i) => ({ box, n: i + 1 }))
@@ -1959,7 +2135,7 @@ class StarshipGame {
                 return `
                 <li class="market-card" data-sell-box-id="${box.id}">
                     <div class="market-info">
-                        <div class="market-name">Compost &mdash; Storage Box ${n}</div>
+                        <div class="market-name">Compost &mdash; ${fab.boxLabel(box)}</div>
                         <div class="market-meta">${box.fillL.toFixed(1)} L</div>
                         ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                     </div>
@@ -1972,10 +2148,12 @@ class StarshipGame {
             <p class="market-credits">Your credits: <strong>${this.credits}</strong></p>
             <ul class="market-list">${rows || '<li class="task-empty">Nothing for sale right now.</li>'}</ul>
             <h4 class="comms-services-title">Supplies</h4>
-            <ul class="market-list">${supplies}</ul>
+            <ul class="market-list">${foodRow}${supplies}</ul>
             <h4 class="comms-services-title">Buying</h4>
             <p class="market-credits">Compost &mdash; ${fab.COMPOST_PRICE_PER_L} credits a litre.</p>
             <ul class="market-list">${compostRows || '<li class="task-empty">You have no finished compost to sell.</li>'}</ul>
+            <p class="market-credits">Equipment &mdash; ${fab.MODULE_SELL_MIN}&ndash;${fab.MODULE_SELL_MAX} credits by condition, from a machine box.${this._resaleNote()}</p>
+            <ul class="market-list">${equipmentRows || '<li class="task-empty">You have no stored equipment to sell.</li>'}</ul>
             <h4 class="comms-services-title">News</h4>
             <p class="task-empty">No bulletins.</p>`;
     }
@@ -2092,7 +2270,23 @@ class StarshipGame {
         return `<div class="repair-target-row"><span class="repair-target-label">Repair to</span>${chips}</div>`;
     }
 
+    // Which module types are fetching less after recent sales, and by how much.
+    _resaleNote() {
+        const fab = this.fabrication;
+        const down = Object.keys(this.moduleResale || {})
+            .map(key => ({ key, pct: Math.round((1 - fab.resaleFactor(key)) * 100) }))
+            .filter(x => x.pct > 0)
+            .map(x => `${fab.moduleName(x.key)} &minus;${x.pct}%`);
+        return down.length ? ` Prices are down after recent sales: ${down.join(', ')}.` : '';
+    }
+
     _repairSystemLabel(systemKey) {
+        if (this.repairManager.isStoredUnit(systemKey)) {
+            const boxId = systemKey.slice(4);
+            const box   = this.fabrication.boxes().find(b => b.id === boxId);
+            const mod   = box?.module;
+            return mod ? `${this.fabrication.moduleName(mod.moduleKey)} (stored, ${this.fabrication.boxLabel(box)})` : 'Stored module';
+        }
         return {
             o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator',
             transceiver: 'Transceiver', waterMaker: 'Water Maker',
@@ -2106,7 +2300,7 @@ class StarshipGame {
         const listEl = document.getElementById('repair-available-list');
         if (!listEl) return;
 
-        const rows = this.repairManager.repairableKeys()
+        const rows = [...this.repairManager.repairableKeys(), ...this.repairManager.storedKeys()]
             .filter(key => this.repairManager.canRepair(key))
             .map(key => {
                 const info = this.repairManager.describeRepair(key, this._repairTargets[key]);
@@ -2115,7 +2309,7 @@ class StarshipGame {
                 return `
                     <li class="task-card task-card-static" data-system-key="${key}">
                         <div class="task-info">
-                            <div class="task-title">${this._repairSystemLabel(key)} &mdash; ${Math.round(this.systems[key].repairPct ?? 100)}%</div>
+                            <div class="task-title">${this._repairSystemLabel(key)} &mdash; ${Math.round(this.repairManager._sys(key).repairPct ?? 100)}%</div>
                             <div class="task-meta">${this._repairLabel(info)} &middot; output ${nowPct}% &rarr; ${Math.round(info.efficiency * 100)}%</div>
                             ${this._repairTargetChips(key, info.targetPct)}
                         </div>

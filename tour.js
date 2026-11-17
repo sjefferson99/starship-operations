@@ -87,6 +87,13 @@ class Tour {
                        <p>Rationing cuts use to a quarter, stretching it to about two days. It's harmless for the first 24 hours, then slowly wears on your health — so it only buys time to get a <strong>water maker</strong>.</p>`,
             },
             {
+                title: 'Food',
+                target: '#card-food',
+                body: `<p>You have five days of <strong>food rations</strong> in a storage box. Each crew member eats three a day.</p>
+                       <p>When they run low, buy more on the planet's market — they need a storage box with room. Run out and nothing happens for three days, then hunger starts to wear the crew down.</p>
+                       <p>What's eaten ends up as solid waste in the black water tank.</p>`,
+            },
+            {
                 title: 'No power, no systems',
                 target: '#card-power',
                 body: `<p>Everything electrical — oxygen, scrubbing, comms, a water maker — runs off this battery. <strong>If it hits zero, they all stop</strong>, whatever their switches say.</p>
@@ -208,6 +215,22 @@ class Tour {
                        <p>You need a working water maker: buy one in Comms &amp; Nav, repair it, and keep it powered.</p>`,
             },
             {
+                id: 'food-out',
+                title: 'Out of food',
+                target: '#card-food',
+                when: g => g.fabrication.rationsAboard() <= 0 && (g.systems.food.starvedHours ?? 0) > 0,
+                body: `<p>There's no food aboard. The crew can go about <strong>three days</strong> without it; after that hunger wears their health down, and ten days later it is fatal.</p>
+                       <p>Buy rations on the market in Comms &amp; Nav. They need an empty storage box, or a food box with room.</p>`,
+            },
+            {
+                id: 'food-low',
+                title: 'Food is running low',
+                target: '#card-food',
+                when: g => g.systems.food.status === 'Warning' && g.fabrication.rationsAboard() > 0,
+                body: `<p>Less than three days of rations left. Buy more on the planet's market (Comms &amp; Nav) — a case is 10 rations.</p>
+                       <p>Rations are stored in storage boxes: they fill food boxes first, then empty ones. If every box is in use, fabricate another from the Work Queue.</p>`,
+            },
+            {
                 id: 'transceiver-fixed',
                 title: 'Transceiver repaired',
                 target: '#card-transceiver',
@@ -255,7 +278,7 @@ class Tour {
                 target: cardFor(isDestroyed),
                 when: g => !!find(g, isDestroyed),
                 body: `<p>That repair failed and the module is beyond saving. It can't be switched on or repaired again.</p>
-                       <p>The local market sells salvaged replacements — a destroyed module is the one case where you can buy a spare.</p>`,
+                       <p>The local market sells salvaged replacements: <strong>Buy &amp; Fit</strong> puts one straight in. With a machine storage box you can also keep a spare aboard and swap it in from the Cargo Hold.</p>`,
             },
             {
                 // Shown once things have gone badly wrong — the moment going back is worth knowing about.
@@ -271,9 +294,9 @@ class Tour {
                 id: 'solids-box',
                 title: 'Solid waste has nowhere to go',
                 target: '#cargo-btn',
-                when: g => g.systems.blackWater.solidL >= 20 && !g.fabrication.boxes().length && !g.fabrication.queuedJobs().length,
-                body: `<p>The water maker can't touch the solid matter in the black water tank, so it only builds up. Instead of dumping it, you can compost it and sell it.</p>
-                       <p>Buy <strong>basic components</strong> and <strong>composting agent</strong> on the market, fabricate a storage box from the Work Queue, dose it with the agent, then move solids into it from the Black Water card.</p>`,
+                when: g => g.systems.blackWater.solidL >= 20 && !g.fabrication.boxes().some(b => b.kind === 'compost'),
+                body: `<p>Everything the crew eat ends up as solid waste in the black water tank, and the water maker can't touch it, so it only builds up. Instead of dumping it, you can compost it and sell it.</p>
+                       <p>You need a storage box of its own — your food is in the one you have. Buy <strong>basic components</strong> and <strong>composting agent</strong> on the market, fabricate a storage box from the Work Queue, dose it with the agent, then move solids into it from the Black Water card.</p>`,
             },
             {
                 id: 'compost-ready',
@@ -281,6 +304,14 @@ class Tour {
                 target: '#cargo-btn',
                 when: g => g.fabrication.boxes().some(b => g.fabrication.boxStatus(b) === 'ready'),
                 body: `<p>A storage box has finished composting. Sell it from the <strong>Cargo Hold</strong>, or the market in Comms &amp; Nav, while you're on a planet with the local network in range — the box is then empty and ready to use again.</p>`,
+            },
+            {
+                id: 'machine-box',
+                title: 'A machine storage box',
+                target: '#cargo-btn',
+                when: g => g.fabrication.machineBoxes().some(b => !b.module),
+                body: `<p>A machine box holds one module — switched off, not wearing, and without needing a slot on the dashboard.</p>
+                       <p>Use <strong>Buy &amp; Store</strong> on the market to put a salvaged module in it. Keep it as a spare and swap it in from the <strong>Cargo Hold</strong>, or repair it in the Work Queue and sell it: a fully repaired module fetches up to 400 credits, far more than the salvage costs. Each sale floods the market a little, so the next of the same kind fetches less for a while.</p>`,
             },
             {
                 id: 'gamble',
@@ -364,7 +395,7 @@ class Tour {
                         && (cap.freeVolumeM3 < cap.totalVolumeM3 * 0.15 || cap.freeMassKg < cargoKg * 0.15);
                 },
                 body: `<p>The ship is nearly full — by volume, or by the mass it's allowed to carry. Once there's no room, buying supplies and fabricating boxes are refused.</p>
-                       <p><strong>Ship Capacity</strong> shows what's taking up the space. Selling finished compost, or using up supplies, frees some.</p>`,
+                       <p><strong>Ship Capacity</strong> shows what's taking up the space. Selling finished compost or stored equipment, or using up supplies, frees some.</p>`,
             },
             {
                 id: 'notifications',
