@@ -16,7 +16,7 @@ function sampleShip(overrides = {}) {
             fuel: { currentL: 42.5, capacityL: 100 },
         },
         repairQueue: [
-            { id: 'task-1', systemKey: 'o2', band: 'minor', totalHours: 3, hoursRemaining: 1.5, status: 'in-progress' },
+            { id: 'task-1', systemKey: 'o2', band: 'minor', totalHours: 3, hoursRemaining: 1.5, status: 'in-progress', targetPct: 50 },
             { id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 10, status: 'queued' },
         ],
         ...overrides,
@@ -72,7 +72,7 @@ test.describe('db.js', () => {
         expect(result.world).toEqual({
             version: '2.0.0', savedAt: result.world.savedAt,
             world: { gameTime: 12345, credits: 980, gameSpeed: 10 },
-            crew: { count: 1, members: [] }, comms: { seed: null, locations: [] }, shipInstanceId: 'player-ship-1',
+            crew: { count: 1, members: [] }, comms: { seed: null, locations: [], market: [] }, shipInstanceId: 'player-ship-1',
             environment: { inBreathableAtmosphere: true, ventsOpen: false },
         });
 
@@ -81,6 +81,47 @@ test.describe('db.js', () => {
         expect(ship.systemState.o2Generator).toEqual({ active: true, count: 1, tier: 1, target: 21.0, repairPct: 80, juryRigged: false, destroyed: false });
         expect(ship.systemState.generator).toEqual({ active: false, count: null, tier: null, target: null, repairPct: 0, juryRigged: true, destroyed: true });
         expect(ship.repairQueue.map(t => t.id)).toEqual(['task-1', 'task-2']);
+        // A task saved without a target (from before targets existed) reads back as a full repair.
+        expect(ship.repairQueue.map(t => t.targetPct)).toEqual([50, 100]);
+
+        // This payload predates the transceiver / water maker: no row is written
+        // for them, and they read back flagged as absent rather than as broken.
+        expect(ship.systemState.transceiver.present).toBe(false);
+        expect(ship.systemState.waterMaker.present).toBe(false);
+    });
+
+    test('transceiver, water maker, black-water exposure and market listings round-trip', () => {
+        const conn = db.initDb(':memory:');
+        const { id } = db.createSave(conn, 'Run A');
+
+        const base = sampleShip();
+        const ship = sampleShip({
+            systemState: {
+                ...base.systemState,
+                transceiver: { active: true, count: 1, tier: 1, repairPct: 100, juryRigged: false, destroyed: false, installed: true },
+                waterMaker:  { active: false, count: 1, tier: 1, repairPct: 17, juryRigged: false, destroyed: false, installed: false },
+                water: { freshCurrentL: 40, freshCapacityL: 500, rationing: true, freshDepletedHours: 0, rationHours: 3,
+                         blackLiquidL: 80, blackSolidL: 20, blackCapacityL: 100, blackExposureHours: 2.5 },
+            },
+        });
+        const market = [
+            { id: 'mkt-1', locationId: 'home', moduleKey: 'waterMaker', name: 'Salvaged Water Maker', repairPct: 17, price: 124 },
+            { id: 'mkt-2', locationId: 'home', moduleKey: 'o2', name: 'Salvaged O₂ Generator', repairPct: 40, price: 186 },
+        ];
+        db.saveSave(conn, id, { world: sampleWorld({ comms: { seed: 7, locations: [], market } }), shipInstances: { ships: [ship] } });
+
+        const result = db.getSave(conn, id);
+        const state  = result.shipInstances.ships[0].systemState;
+        expect(state.transceiver).toMatchObject({ present: true, active: true, repairPct: 100, installed: true });
+        expect(state.waterMaker).toMatchObject({ present: true, active: false, repairPct: 17, installed: false });
+        expect(state.water.blackExposureHours).toBe(2.5);
+        expect(result.world.comms.market).toEqual(market);
+
+        // Re-saving with one listing sold fully replaces the stock; deleting the save clears it.
+        db.saveSave(conn, id, { world: sampleWorld({ comms: { seed: 7, locations: [], market: [market[1]] } }), shipInstances: { ships: [ship] } });
+        expect(db.getSave(conn, id).world.comms.market).toEqual([market[1]]);
+        db.deleteSave(conn, id);
+        expect(conn.prepare('SELECT COUNT(*) AS n FROM market_listings').get().n).toBe(0);
     });
 
     test('crew members round-trip health/shifts/dead, and re-saving fully replaces the roster', () => {
@@ -138,7 +179,7 @@ test.describe('db.js', () => {
 
         const tasks = db.getSave(conn, id).shipInstances.ships[0].repairQueue;
         expect(tasks).toHaveLength(1);
-        expect(tasks[0]).toEqual({ id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 4, status: 'in-progress' });
+        expect(tasks[0]).toEqual({ id: 'task-2', systemKey: 'co2', band: 'major', totalHours: 10, hoursRemaining: 4, status: 'in-progress', targetPct: 100 });
     });
 
     test('two saves with the same ship id do not collide with each other', () => {

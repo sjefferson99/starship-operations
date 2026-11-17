@@ -31,6 +31,7 @@ class GameState {
             comms: {
                 seed: game.commsSeed ?? null,
                 locations: game.commsLocations ?? [],
+                market: game.market ?? [],
             },
 
             shipInstanceId: game.shipInstanceId ?? 'player-ship-1',
@@ -67,6 +68,8 @@ class GameState {
                 active: s.power.active,
                 repairPct: s.power.repairPct ?? 100, juryRigged: s.power.juryRigged ?? false, destroyed: s.power.destroyed ?? false,
             },
+            transceiver: GameState._moduleSnapshot(s.transceiver),
+            waterMaker:  GameState._moduleSnapshot(s.waterMaker),
             fuel: {
                 currentL: s.fuel.current, capacityL: s.fuel.capacity,
             },
@@ -75,6 +78,7 @@ class GameState {
                 rationing: s.freshWater.rationing, freshDepletedHours: s.freshWater.depletedHours ?? 0,
                 rationHours: s.freshWater.rationHours ?? 0,
                 blackLiquidL: s.blackWater.liquidL, blackSolidL: s.blackWater.solidL, blackCapacityL: s.blackWater.capacity,
+                blackExposureHours: s.blackWater.exposureHours ?? 0,
             },
         };
 
@@ -90,6 +94,30 @@ class GameState {
         };
     }
 
+    static _moduleSnapshot(sys) {
+        return {
+            active: sys.active, count: sys.count, tier: sys.tier,
+            repairPct: sys.repairPct ?? 100, juryRigged: sys.juryRigged ?? false, destroyed: sys.destroyed ?? false,
+            installed: sys.installed !== false,
+        };
+    }
+
+    // Restores one of the modules added after the original three. A save from
+    // before the module existed carries no state for it — fall back to
+    // `legacy` (chosen so an old save isn't suddenly stranded: a working
+    // transceiver, no water maker) rather than to a fresh New Game's defaults.
+    static _applyModule(sys, saved, legacy) {
+        const known = saved && saved.present !== false && saved.repairPct != null;
+        const src = known ? saved : legacy;
+        sys.active     = !!src.active;
+        sys.count      = src.count ?? 1;
+        sys.tier       = src.tier ?? 1;
+        sys.repairPct  = src.repairPct ?? 100;
+        sys.juryRigged = src.juryRigged ?? false;
+        sys.destroyed  = src.destroyed ?? false;
+        sys.installed  = src.installed ?? true;
+    }
+
     // Apply a world snapshot + ship instance data back onto a live game instance.
     static restore(game, world, shipInstances) {
         if (!world || !world.world) {
@@ -103,6 +131,7 @@ class GameState {
         game.crewManager.applySavedRoster(world.crew.members ?? []);
         game.commsSeed      = world.comms?.seed ?? null;
         game.commsLocations = world.comms?.locations ?? [];
+        game.market         = world.comms?.market ?? [];
         game.shipInstanceId = world.shipInstanceId ?? 'player-ship-1';
 
         game.inBreathableAtmosphere = world.environment?.inBreathableAtmosphere ?? false;
@@ -167,6 +196,10 @@ class GameState {
         game.systems.blackWater.current  = game.systems.blackWater.liquidL + game.systems.blackWater.solidL;
         game.systems.blackWater.capacity = water.blackCapacityL ?? 100;
         game.systems.blackWater.level    = (game.systems.blackWater.current / game.systems.blackWater.capacity) * 100;
+        game.systems.blackWater.exposureHours = water.blackExposureHours ?? 0;
+
+        GameState._applyModule(game.systems.transceiver, s.transceiver, { active: true, repairPct: 100, installed: true });
+        GameState._applyModule(game.systems.waterMaker,  s.waterMaker,  { active: false, repairPct: 100, installed: false });
     }
 
     // ── Save slots (requires: node server.js) ──────────────────────────────

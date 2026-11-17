@@ -20,15 +20,24 @@ class SystemUpdate {
         this.CO2_DRAW_W_BY_TIER   = [21];
         this.GEN_OUTPUT_W    = 142;
         this.GEN_FUEL_L_HR   = 0.01;
+        this.TRANSCEIVER_DRAW_W      = 4;
+        this.TRANSCEIVER_TRANSMIT_W  = 2;
+        this.TRANSCEIVER_RANGE_LY_PER_W = 1;
+        this.WATER_MAKER_DRAW_W  = 30;
+        this.WATER_MAKER_L_HR    = 6;
+        this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR = 0.4; // condensing from air vs reclaiming waste
 
-        // Water usage, per crew member per day — no water makers/processing yet,
-        // so fresh water only ever drains until manually topped up.
+        // Water usage, per crew member per day.
         this.WATER_CONSERVATIVE_L_PER_CREW_DAY = 25;
         this.WATER_NORMAL_L_PER_CREW_DAY       = 100;
 
         // Coming off rationing rehydrates the crew with one lump draw, rather
         // than gradually — see main.js's toggleWaterRationing().
         this.WATER_RATION_RESET_L_PER_CREW = 50;
+
+        // The black water tank counts as "full" (waste backing up into the
+        // cabin — see CrewManager's sewage exposure) from this level up.
+        this.BLACK_WATER_FULL_PCT = 99.9;
     }
 
     // Reads a per-tier numeric field from the loaded module_specs.json,
@@ -41,10 +50,12 @@ class SystemUpdate {
 
     // dt: game-seconds elapsed this tick (= gameSpeed × 1 real second)
     update(dt = 1) {
+        this._computePowerBudget(dt);
         this._updateO2(dt);
         this._updateCO2(dt);
-        this._updatePowerAndFuel(dt);
+        this._updateTransceiver();
         this._updateWater(dt);
+        this._updatePowerAndFuel(dt);
         this.game.crewManager.update(dt);
         this.game.crew = this.game.crewManager.aliveCount();
         this.game.repairManager.decay(dt);
@@ -56,14 +67,68 @@ class SystemUpdate {
         }
     }
 
+    // ── Power budget ────────────────────────────────────────────────────────
+    // Nothing electrical runs without power. Before any device updates, work
+    // out what fraction of this tick's total electrical demand can actually be
+    // met from the battery plus whatever the generator can make this tick.
+    // 1 = fully powered, 0 = dead ship, in between = brownout (every device's
+    // output is scaled down by the same fraction). Computed against each
+    // device's full rated draw, and over the whole tick's energy rather than
+    // an instantaneous "battery > 0" check, so one huge high-speed tick can't
+    // run devices for 1000 seconds on a battery that only had 10 seconds left.
+    _poweredDevices() {
+        const s = this.game.systems;
+        return [
+            { sys: s.o2,          type: 'o2Generator', fallbackW: this.O2_DRAW_W_BY_TIER[s.o2.tier - 1] ?? 0 },
+            { sys: s.co2,         type: 'co2Scrubber', fallbackW: this.CO2_DRAW_W_BY_TIER[s.co2.tier - 1] ?? 0 },
+            { sys: s.transceiver, type: 'transceiver', fallbackW: this.TRANSCEIVER_DRAW_W },
+            { sys: s.waterMaker,  type: 'waterMaker',  fallbackW: this.WATER_MAKER_DRAW_W },
+        ].filter(d => d.sys);
+    }
+
+    _ratedDrawW(device) {
+        return this._moduleField(device.type, device.sys.tier, 'powerDrawW', device.fallbackW) * (device.sys.count ?? 1);
+    }
+
+    _isRunning(sys) {
+        return !!sys && sys.active && !sys.destroyed && sys.installed !== false;
+    }
+
+    _generatorMaxW() {
+        const power = this.game.systems.power;
+        const fuel  = this.game.systems.fuel;
+        if (!power.active || power.destroyed || fuel.current <= 0) return 0;
+        const ratedOutputW = this._moduleField('generator', power.tier, 'outputW', this.GEN_OUTPUT_W);
+        return ratedOutputW * this.game.repairManager.efficiencyFor('power');
+    }
+
+    _computePowerBudget(dt) {
+        const power = this.game.systems.power;
+        const hours = dt / 3600;
+
+        const demandW = this._poweredDevices()
+            .filter(d => this._isRunning(d.sys))
+            .reduce((sum, d) => sum + this._ratedDrawW(d), 0);
+
+        const supplyWh = power.current + this._generatorMaxW() * hours;
+        const needWh   = demandW * hours;
+
+        power.demandW       = demandW;
+        power.powerFraction = needWh > 0 ? Math.max(0, Math.min(1, supplyWh / needWh)) : (supplyWh > 0 ? 1 : 0);
+    }
+
+    _powerFraction() {
+        return this.game.systems.power.powerFraction ?? 1;
+    }
+
     _updateO2(dt) {
         const sys  = this.game.systems.o2;
         const crew = this.game.crew;
 
         const consumptionLhr = this.O2_CONSUMPTION_L_HR * crew;
         const ratedLhr       = this._moduleField('o2Generator', sys.tier, 'outputLhr', this.O2_GEN_L_HR_BY_TIER[sys.tier - 1] ?? 0);
-        const efficiency     = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
-        const maxGenLhr      = ratedLhr * sys.count * efficiency;
+        const efficiency     = this.game.repairManager.efficiencyFor('o2');
+        const maxGenLhr      = ratedLhr * sys.count * efficiency * this._powerFraction();
 
         // Vent computed first — needed to calculate maintenance generation
         let ventLhr = 0;
@@ -106,8 +171,8 @@ class SystemUpdate {
 
         const productionLhr = this.CO2_PRODUCTION_L_HR * crew;
         const ratedLhr      = this._moduleField('co2Scrubber', sys.tier, 'outputLhr', this.CO2_SCR_L_HR_BY_TIER[sys.tier - 1] ?? 0);
-        const efficiency    = this.game.repairManager.efficiency(sys.repairPct, sys.destroyed);
-        const maxScrLhr     = ratedLhr * sys.count * efficiency;
+        const efficiency    = this.game.repairManager.efficiencyFor('co2');
+        const maxScrLhr     = ratedLhr * sys.count * efficiency * this._powerFraction();
 
         // Ambient/outside CO2 level — vents equalise the cabin toward this, not toward 0.
         const CO2_AMBIENT = 0.04;
@@ -149,29 +214,47 @@ class SystemUpdate {
         sys.netLhr        = netLhr;
     }
 
+    // Transceiver: effective transmit power falls with the same repair
+    // efficiency curve as every other module, and range is simply proportional
+    // to it. What that range actually reveals is CommsNav's business.
+    _updateTransceiver() {
+        const sys = this.game.systems.transceiver;
+        if (!sys) return;
+
+        const ratedTransmitW = this._moduleField('transceiver', sys.tier, 'transmitW', this.TRANSCEIVER_TRANSMIT_W);
+        const rangeLyPerW    = this._moduleField('transceiver', sys.tier, 'rangeLyPerW', this.TRANSCEIVER_RANGE_LY_PER_W);
+        const efficiency     = this.game.repairManager.efficiencyFor('transceiver');
+        const running        = this._isRunning(sys);
+        const fraction       = running ? this._powerFraction() : 0;
+
+        sys.ratedTransmitW = ratedTransmitW;
+        sys.ratedRangeLy   = ratedTransmitW * rangeLyPerW;
+        sys.transmitW      = ratedTransmitW * efficiency * fraction;
+        sys.rangeLy        = sys.transmitW * rangeLyPerW;
+        sys.loadFraction   = running ? 1 : 0; // no throttling — draws its full (small) rating whenever on
+    }
+
     _updatePowerAndFuel(dt) {
         const power = this.game.systems.power;
         const fuel  = this.game.systems.fuel;
-        const o2    = this.game.systems.o2;
-        const co2   = this.game.systems.co2;
+        const s     = this.game.systems;
+        const fraction = this._powerFraction();
 
-        // Power draw scales with fraction of rated output each device is currently using
-        const o2DrawWRated  = this._moduleField('o2Generator', o2.tier, 'powerDrawW', this.O2_DRAW_W_BY_TIER[o2.tier - 1] ?? 0);
-        const co2DrawWRated = this._moduleField('co2Scrubber', co2.tier, 'powerDrawW', this.CO2_DRAW_W_BY_TIER[co2.tier - 1] ?? 0);
-        const o2DrawW  = o2.active
-            ? o2DrawWRated * o2.count * (o2.genFraction ?? 1)
-            : 0;
-        const co2DrawW = co2.active
-            ? co2DrawWRated * co2.count * (co2.scrFraction ?? 1)
-            : 0;
-        const totalDrawW = o2DrawW + co2DrawW;
+        // Each device draws in proportion to how hard it's actually working
+        // (its throttle fraction) and to how much power it's actually getting.
+        const loadOf = { o2Generator: s.o2.genFraction ?? 1, co2Scrubber: s.co2.scrFraction ?? 1,
+                         transceiver: s.transceiver?.loadFraction ?? 0, waterMaker: s.waterMaker?.loadFraction ?? 0 };
+        let totalDrawW = 0;
+        this._poweredDevices().forEach(d => {
+            d.sys.drawW = this._isRunning(d.sys) ? this._ratedDrawW(d) * loadOf[d.type] * fraction : 0;
+            totalDrawW += d.sys.drawW;
+        });
 
         // Proportional generator: at/above battery target throttle to cover exact draw
         // so net battery = 0 and display reads "Stable" rather than flickering.
         const ratedOutputW = this._moduleField('generator', power.tier, 'outputW', this.GEN_OUTPUT_W);
-        const genEfficiency = this.game.repairManager.efficiency(power.repairPct, power.destroyed);
-        const maxOutputW    = ratedOutputW * genEfficiency;
-        const genRunning = power.active && !power.destroyed && fuel.current > 0;
+        const maxOutputW   = this._generatorMaxW();
+        const genRunning   = power.active && !power.destroyed && fuel.current > 0;
         let genOutputW = 0;
         if (genRunning) {
             if (power.target != null && power.level >= power.target) {
@@ -186,8 +269,9 @@ class SystemUpdate {
         power.level   = (power.current / power.capacity) * 100;
 
         power.genOutputW = genOutputW;
-        power.o2DrawW    = o2DrawW;
-        power.co2DrawW   = co2DrawW;
+        power.o2DrawW    = s.o2.drawW;
+        power.co2DrawW   = s.co2.drawW;
+        power.otherDrawW = (s.transceiver?.drawW ?? 0) + (s.waterMaker?.drawW ?? 0);
         power.netWhr     = netW;
 
         // Fuel burn proportional to nominal (undamaged) rated output — a degraded
@@ -213,28 +297,81 @@ class SystemUpdate {
 
         fresh.current        = Math.max(0, fresh.current - consumed);
         fresh.consumeRateLhr = consumeLhr;
-        fresh.level          = (fresh.current / fresh.capacity) * 100;
-        fresh.depletedHours  = fresh.current <= 0 ? (fresh.depletedHours || 0) + hours : 0;
-        fresh.rationHours    = fresh.rationing ? (fresh.rationHours || 0) + hours : 0;
 
         // 90% of the fresh water actually drawn becomes black-water liquid (10%
         // lost to drinking/showering/evaporation); that liquid then gains 20%
         // extra volume from solid waste, tracked separately for the dashboard
-        // split and for future reclamation processing.
+        // split and for the water maker's reclamation below.
         const liquidProduced = consumed * 0.9;
         const solidProduced  = liquidProduced * 0.2;
         const totalProduced  = liquidProduced + solidProduced;
-        const capacityLeft   = Math.max(0, black.capacity - black.current);
+        const capacityLeft   = Math.max(0, black.capacity - (black.liquidL + black.solidL));
         const overflowRatio  = totalProduced > 0 ? Math.min(1, capacityLeft / totalProduced) : 1;
 
         black.liquidL = black.liquidL + liquidProduced * overflowRatio;
         black.solidL  = black.solidL  + solidProduced  * overflowRatio;
+
+        this._runWaterMaker(hours);
+
+        fresh.level          = (fresh.current / fresh.capacity) * 100;
+        fresh.depletedHours  = fresh.current <= 0 ? (fresh.depletedHours || 0) + hours : 0;
+        fresh.rationHours    = fresh.rationing ? (fresh.rationHours || 0) + hours : 0;
+
         black.current = black.liquidL + black.solidL;
         black.level   = (black.current / black.capacity) * 100;
 
+        // A full tank has nowhere to put new waste — it backs up into the cabin.
+        // Exposure time drives CrewManager's sewage health effects and resets
+        // the moment the tank is relieved (dumped, or reclaimed by a water maker).
+        black.exposureHours = black.level >= this.BLACK_WATER_FULL_PCT ? (black.exposureHours || 0) + hours : 0;
+
+        // Net of what the water maker took back out this tick, so the dashboard's
+        // fill rate goes negative when reclamation is winning.
         black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
         black.solidRateLhr  = black.liquidRateLhr * 0.2;
-        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr;
+        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr - (black.reclaimRateLhr || 0);
+    }
+
+    // Water maker: reclaims black-water liquid into fresh water first; while
+    // parked in a breathable atmosphere it makes up any shortfall by condensing
+    // moisture from outside air. In space, black-water liquid is its only source.
+    _runWaterMaker(hours) {
+        const wm    = this.game.systems.waterMaker;
+        const fresh = this.game.systems.freshWater;
+        const black = this.game.systems.blackWater;
+        if (!wm) return;
+
+        wm.outputLhr = 0; wm.loadFraction = 0; wm.source = 'none';
+        black.reclaimRateLhr = 0;
+        black.reclaimStarved = false; // true when the maker wanted more than the tank's liquid could give
+        wm.ratedLhr  = this._moduleField('waterMaker', wm.tier, 'outputLhr', this.WATER_MAKER_L_HR) * (wm.count ?? 1);
+        if (!this._isRunning(wm) || hours <= 0) return;
+
+        const efficiency = this.game.repairManager.efficiencyFor('waterMaker');
+        const maxL = wm.ratedLhr * efficiency * this._powerFraction() * hours;
+        if (maxL <= 0) return;
+
+        const roomL     = Math.max(0, fresh.capacity - fresh.current);
+        const wantL     = Math.min(maxL, roomL);
+        const fromBlack = Math.min(wantL, black.liquidL);
+        const fromAir   = this.game.inBreathableAtmosphere ? wantL - fromBlack : 0;
+        const madeL     = fromBlack + fromAir;
+
+        black.liquidL  -= fromBlack;
+        fresh.current  += madeL;
+
+        // Only the liquid can be reclaimed. If the maker had capacity to spare but
+        // the liquid ran out, what's left in the tank is solid matter it can't touch.
+        black.reclaimRateLhr = fromBlack / hours;
+        black.reclaimStarved = fromBlack < wantL;
+
+        // Condensing clean moisture from outside air is far less work than
+        // processing waste, so that share of the output draws less power
+        // (`atmospherePowerFactor` in module_specs.json).
+        const airFactor = this._moduleField('waterMaker', wm.tier, 'atmospherePowerFactor', this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR);
+        wm.outputLhr    = madeL / hours;
+        wm.loadFraction = (fromBlack + fromAir * airFactor) / maxL;
+        wm.source       = madeL <= 0 ? (roomL <= 0 ? 'full' : 'none') : fromAir > fromBlack ? 'atmosphere' : 'blackWater';
     }
 
     _updateStatuses() {
@@ -296,9 +433,20 @@ class SystemUpdate {
             blackWater.status = 'Normal';
         }
 
+        // Transceiver: fine once it can reach the local network, otherwise a warning.
+        const transceiver = this.game.systems.transceiver;
+        if (transceiver) {
+            transceiver.status = this.game.commsNav.hasLocalDetails() ? 'Normal' : 'Warning';
+        }
+
+        const waterMaker = this.game.systems.waterMaker;
+        if (waterMaker) {
+            waterMaker.status = (waterMaker.installed && (waterMaker.repairPct ?? 100) < 50) ? 'Warning' : 'Normal';
+        }
+
         // A destroyed module is offline regardless of any other reading.
-        [o2, co2, power].forEach(sys => {
-            if (sys.destroyed) {
+        [o2, co2, power, transceiver, waterMaker].forEach(sys => {
+            if (sys && sys.destroyed) {
                 sys.status = 'Critical';
                 sys.active = false;
             }

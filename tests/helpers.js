@@ -22,6 +22,15 @@ const test = base.test.extend({
             } catch { /* not JSON, or body already consumed */ }
         });
 
+        // The first-run tutorial and the contextual tips (tour.js) both put a card
+        // over the dashboard that would sit on top of controls specs click — mark
+        // the tour as already seen and switch tips off. tests/tour.spec.js opts
+        // back in with a later init script that clears the relevant key.
+        await page.addInitScript(() => {
+            localStorage.setItem('starshipOps.tourSeen', '1');
+            localStorage.setItem('starshipOps.tipsOff', '1');
+        });
+
         await use(page);
 
         await Promise.all(
@@ -47,4 +56,17 @@ async function startNewGame(page, saveName) {
     return name;
 }
 
-module.exports = { test, startNewGame };
+// A new ship's transceiver is too worn to reach anything. Repairs it, switches
+// it on and runs one tick, so every charted location and the local market are
+// in range — for specs that are about Comms & Nav rather than about fixing it.
+async function bringCommsOnline(page) {
+    await page.evaluate(() => {
+        const g = window.game;
+        g.systems.transceiver.repairPct = 100;
+        g.systems.transceiver.active    = true;
+        g.systemUpdate.update(1);
+        g.updateDisplay();
+    });
+}
+
+module.exports = { test, startNewGame, bringCommsOnline };

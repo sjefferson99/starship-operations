@@ -10,7 +10,8 @@ const { DatabaseSync } = require('node:sqlite');
 const fs   = require('fs');
 const path = require('path');
 
-const SYSTEM_KEYS = ['o2Generator', 'co2Scrubber', 'generator'];
+const SYSTEM_KEYS = ['o2Generator', 'co2Scrubber', 'generator', 'transceiver', 'waterMaker'];
+const OPTIONAL_SYSTEM_KEYS = ['transceiver', 'waterMaker']; // added after the first saves were written
 
 // Each entry runs once, in order, against a fresh-or-upgrading DB. Append new
 // entries here as the schema grows — never edit an already-shipped entry.
@@ -261,6 +262,30 @@ const MIGRATIONS = [
             );
         `);
     },
+    // Transceiver + water maker modules (rows in ship_modules like the rest;
+    // `installed` is what distinguishes "no water maker fitted yet" from a
+    // fitted one), black-water exposure time, and the local market's stock.
+    db => {
+        db.exec(`
+            ALTER TABLE ship_modules ADD COLUMN installed INTEGER;
+            ALTER TABLE ship_water ADD COLUMN black_exposure_hours REAL;
+
+            CREATE TABLE IF NOT EXISTS market_listings (
+                save_id INTEGER,
+                id TEXT,
+                location_id TEXT,
+                module_key TEXT,
+                name TEXT,
+                repair_pct REAL,
+                price INTEGER,
+                PRIMARY KEY (save_id, id)
+            );
+        `);
+    },
+    // Staged repairs: a task now works up through stages toward a chosen level.
+    db => {
+        db.exec('ALTER TABLE repair_tasks ADD COLUMN target_pct REAL;');
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -331,7 +356,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -359,12 +384,18 @@ function getSave(db, saveId) {
         id: r.id, kind: r.kind, name: r.name, x: r.x, y: r.y, z: r.z,
     }));
 
+    const marketRows = db.prepare('SELECT * FROM market_listings WHERE save_id = ?').all(saveId);
+    const market = marketRows.map(r => ({
+        id: r.id, locationId: r.location_id, moduleKey: r.module_key, name: r.name,
+        repairPct: r.repair_pct, price: r.price,
+    }));
+
     const world = {
         version: save.version,
         savedAt: save.updated_at,
         world: { gameTime: save.game_time, credits: save.credits, gameSpeed: save.game_speed },
         crew: { count: save.crew_count, members: crewMembers },
-        comms: { seed: save.comms_seed, locations: commsLocations },
+        comms: { seed: save.comms_seed, locations: commsLocations, market },
         shipInstanceId: save.ship_instance_id,
         environment: {
             inBreathableAtmosphere: !!save.in_breathable_atmosphere,
@@ -394,6 +425,14 @@ function _composeShip(db, saveId, shipRow) {
             repairPct: m.repair_pct, juryRigged: !!m.jury_rigged, destroyed: !!m.destroyed,
         };
     };
+    // Modules added after the original three. `present` is false for a save
+    // written before they existed, so the client can pick sensible defaults
+    // instead of reading a row of nulls as "broken and switched off".
+    const optionalModuleState = key => ({
+        ...moduleState(key),
+        present: !!byKey[key],
+        installed: byKey[key]?.installed == null ? null : !!byKey[key].installed,
+    });
 
     return {
         id: shipRow.id, name: shipRow.name, registration: shipRow.registration,
@@ -406,6 +445,8 @@ function _composeShip(db, saveId, shipRow) {
                 count: battery.count, tier: battery.tier, target: battery.target,
             },
             generator: moduleState('generator'),
+            transceiver: optionalModuleState('transceiver'),
+            waterMaker: optionalModuleState('waterMaker'),
             fuel: { currentL: fuel.current_l, capacityL: fuel.capacity_l },
             water: {
                 freshCurrentL: water.fresh_current_l, freshCapacityL: water.fresh_capacity_l,
@@ -413,11 +454,13 @@ function _composeShip(db, saveId, shipRow) {
                 freshDepletedHours: water.fresh_depleted_hours,
                 rationHours: water.fresh_ration_hours,
                 blackLiquidL: water.black_liquid_l, blackSolidL: water.black_solid_l, blackCapacityL: water.black_capacity_l,
+                blackExposureHours: water.black_exposure_hours,
             },
         },
         repairQueue: tasks.map(t => ({
             id: t.id, systemKey: t.system_key, band: t.band,
             totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
+            targetPct: t.target_pct ?? 100, // tasks saved before repair targets existed were full repairs
         })),
     };
 }
@@ -442,6 +485,7 @@ function saveSave(db, saveId, { world, shipInstances }) {
         for (const ship of shipInstances?.ships ?? []) _saveOneShip(db, saveId, ship);
         _saveCrewMembers(db, saveId, world?.crew?.members ?? []);
         _saveCommsLocations(db, saveId, world?.comms?.locations ?? []);
+        _saveMarketListings(db, saveId, world?.comms?.market ?? []);
         db.exec('COMMIT');
     } catch (e) {
         db.exec('ROLLBACK');
@@ -469,6 +513,16 @@ function _saveCommsLocations(db, saveId, locations) {
     });
 }
 
+function _saveMarketListings(db, saveId, listings) {
+    db.prepare('DELETE FROM market_listings WHERE save_id = ?').run(saveId);
+    listings.forEach(l => {
+        db.prepare(`
+            INSERT INTO market_listings (save_id, id, location_id, module_key, name, repair_pct, price)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(saveId, l.id, l.locationId ?? null, l.moduleKey ?? null, l.name ?? null, l.repairPct ?? null, l.price ?? null);
+    });
+}
+
 function _saveOneShip(db, saveId, ship) {
     db.prepare(`
         INSERT INTO ships (id, name, registration, save_id) VALUES (?, ?, ?, ?)
@@ -483,16 +537,21 @@ function _saveOneShip(db, saveId, ship) {
     `).run(saveId, ship.id, atm.o2Pct ?? null, atm.co2Pct ?? null);
 
     for (const key of SYSTEM_KEYS) {
+        // A payload from before the newer modules existed carries no entry for
+        // them — write no row at all rather than a row of defaults.
+        if (s[key] == null && OPTIONAL_SYSTEM_KEYS.includes(key)) continue;
         const m = s[key] ?? {};
         db.prepare(`
-            INSERT INTO ship_modules (save_id, ship_id, system_key, active, count, tier, target, repair_pct, jury_rigged, destroyed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ship_modules (save_id, ship_id, system_key, active, count, tier, target, repair_pct, jury_rigged, destroyed, installed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(save_id, ship_id, system_key) DO UPDATE SET
                 active = excluded.active, count = excluded.count, tier = excluded.tier, target = excluded.target,
-                repair_pct = excluded.repair_pct, jury_rigged = excluded.jury_rigged, destroyed = excluded.destroyed
+                repair_pct = excluded.repair_pct, jury_rigged = excluded.jury_rigged, destroyed = excluded.destroyed,
+                installed = excluded.installed
         `).run(
             saveId, ship.id, key, m.active ? 1 : 0, m.count ?? null, m.tier ?? null, m.target ?? null,
-            m.repairPct ?? 100, m.juryRigged ? 1 : 0, m.destroyed ? 1 : 0
+            m.repairPct ?? 100, m.juryRigged ? 1 : 0, m.destroyed ? 1 : 0,
+            m.installed == null ? null : (m.installed ? 1 : 0)
         );
     }
 
@@ -513,25 +572,27 @@ function _saveOneShip(db, saveId, ship) {
 
     const water = s.water ?? {};
     db.prepare(`
-        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l, black_exposure_hours)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(save_id, ship_id) DO UPDATE SET
             fresh_current_l = excluded.fresh_current_l, fresh_capacity_l = excluded.fresh_capacity_l,
             fresh_rationing = excluded.fresh_rationing, fresh_depleted_hours = excluded.fresh_depleted_hours,
             fresh_ration_hours = excluded.fresh_ration_hours,
-            black_liquid_l = excluded.black_liquid_l, black_solid_l = excluded.black_solid_l, black_capacity_l = excluded.black_capacity_l
+            black_liquid_l = excluded.black_liquid_l, black_solid_l = excluded.black_solid_l, black_capacity_l = excluded.black_capacity_l,
+            black_exposure_hours = excluded.black_exposure_hours
     `).run(
         saveId, ship.id, water.freshCurrentL ?? null, water.freshCapacityL ?? null,
         water.rationing ? 1 : 0, water.freshDepletedHours ?? null, water.rationHours ?? null,
-        water.blackLiquidL ?? null, water.blackSolidL ?? null, water.blackCapacityL ?? null
+        water.blackLiquidL ?? null, water.blackSolidL ?? null, water.blackCapacityL ?? null,
+        water.blackExposureHours ?? null
     );
 
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
     (ship.repairQueue ?? []).forEach((task, idx) => {
         db.prepare(`
-            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(task.id, saveId, ship.id, task.systemKey, task.band, task.totalHours, task.hoursRemaining, task.status, idx);
+            INSERT INTO repair_tasks (id, save_id, ship_id, system_key, band, total_hours, hours_remaining, status, queue_position, target_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(task.id, saveId, ship.id, task.systemKey, task.band, task.totalHours, task.hoursRemaining, task.status, idx, task.targetPct ?? 100);
     });
 }
 
