@@ -1,3 +1,54 @@
+// ── Overlay show/hide ──────────────────────────────────────────────────────
+// Every modal (the .overlay-screen family, pause menu, seed and intro screens)
+// is opened and closed through here. Opening is animated by CSS (display
+// none → flex restarts the card-pop animation); closing plays a short fade
+// with the Web Animations API and only then sets display:none. While closing
+// the overlay ignores the mouse, and isOpen() already reports it as closed, so
+// toggles and per-tick "is this screen open?" checks behave as if it were gone.
+// Re-opening mid-close cancels the fade.
+const Overlay = {
+    motionOk() {
+        return typeof Element.prototype.animate === 'function'
+            && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    },
+
+    isOpen(el) {
+        return el.style.display === 'flex' && !el._closeAnims;
+    },
+
+    show(el) {
+        if (el._closeAnims) {
+            const anims = el._closeAnims;
+            el._closeAnims = null;
+            anims.forEach(a => a.cancel());
+        }
+        el.style.pointerEvents = '';
+        el.style.display = 'flex';
+    },
+
+    hide(el) {
+        if (el.style.display === 'none' || el._closeAnims) return;
+        if (!Overlay.motionOk()) { el.style.display = 'none'; return; }
+
+        const timing = { duration: 160, easing: 'ease-in', fill: 'forwards' };
+        const anims = [el.animate([{ opacity: 1 }, { opacity: 0 }], timing)];
+        const card = el.firstElementChild;
+        if (card) anims.push(card.animate(
+            [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(6px) scale(0.97)' }], timing
+        ));
+        el._closeAnims = anims;
+        el.style.pointerEvents = 'none';
+
+        Promise.all(anims.map(a => a.finished)).then(() => {
+            if (el._closeAnims !== anims) return; // re-opened meanwhile
+            el._closeAnims = null;
+            el.style.display = 'none';
+            el.style.pointerEvents = '';
+            anims.forEach(a => a.cancel()); // drop the held end state
+        }, () => { /* cancelled by show() */ });
+    },
+};
+
 class StarshipGame {
     constructor() {
         this.gameActive = false;
@@ -269,7 +320,7 @@ class StarshipGame {
 
     _showIntro() {
         this.launchScreen.style.display = 'none';
-        this.introModal.style.display   = 'flex';
+        Overlay.show(this.introModal);
 
         const msg = this.storyMessages?.['new-game'];
         if (msg) this._injectIntroContent(msg);
@@ -309,7 +360,7 @@ class StarshipGame {
     }
 
     _startFromIntro() {
-        this.introModal.style.display = 'none';
+        Overlay.hide(this.introModal);
         this.startNewGame();
     }
 
@@ -339,13 +390,13 @@ class StarshipGame {
     _showSeedScreen() {
         document.getElementById('seed-input').value = this.commsNav.rollSeed();
         this.launchScreen.style.display = 'none';
-        this.seedScreen.style.display   = 'flex';
+        Overlay.show(this.seedScreen);
     }
 
     _confirmSeedAndShowIntro() {
         const parsed = parseInt(document.getElementById('seed-input').value, 10);
         this._pendingSeed = Number.isFinite(parsed) && parsed >= 0 ? parsed : this.commsNav.rollSeed();
-        this.seedScreen.style.display = 'none';
+        Overlay.hide(this.seedScreen);
         this._showIntro();
     }
 
@@ -371,6 +422,7 @@ class StarshipGame {
         this._updateShipIdentityUI();
         this.launchScreen.style.display  = 'none';
         this.gameContainer.style.display = 'block';
+        this._playDashboardIntro();
         this._startTimer();
         this._startAutosaveTimer();
         this.updateDisplay();
@@ -382,12 +434,12 @@ class StarshipGame {
 
     async _openLoadScreen() {
         this.launchScreen.style.display = 'none';
-        this.loadScreen.style.display   = 'flex';
+        Overlay.show(this.loadScreen);
         await this._renderLoadScreen();
     }
 
     _closeLoadScreen() {
-        this.loadScreen.style.display   = 'none';
+        Overlay.hide(this.loadScreen);
         this.launchScreen.style.display = 'block';
     }
 
@@ -456,6 +508,7 @@ class StarshipGame {
             this._closeLoadScreen();
             this.launchScreen.style.display  = 'none';
             this.gameContainer.style.display = 'block';
+            this._playDashboardIntro();
             this._startTimer();
             this._startAutosaveTimer();
             this.updateDisplay();
@@ -472,7 +525,7 @@ class StarshipGame {
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
-            this.pauseMenu.style.display     = 'none';
+            Overlay.hide(this.pauseMenu);
         }
     }
 
@@ -490,7 +543,7 @@ class StarshipGame {
         subtitleEl.textContent   = 'All crew are dead.';
         subtitleEl.style.display = '';
 
-        this.pauseMenu.style.display = 'flex';
+        Overlay.show(this.pauseMenu);
     }
 
     // Pause menu can be left mid-"GAME OVER" from a prior session — restore
@@ -530,8 +583,8 @@ class StarshipGame {
     }
 
     toggleTaskQueueScreen() {
-        const isOpen = this.taskQueueScreen.style.display === 'flex';
-        this.taskQueueScreen.style.display = isOpen ? 'none' : 'flex';
+        const isOpen = Overlay.isOpen(this.taskQueueScreen);
+        if (isOpen) Overlay.hide(this.taskQueueScreen); else Overlay.show(this.taskQueueScreen);
         if (!isOpen) this._displayRepairQueue();
     }
 
@@ -609,7 +662,7 @@ class StarshipGame {
     togglePause() {
         if (!this.gameActive) return;
         this.gamePaused = !this.gamePaused;
-        this.pauseMenu.style.display = this.gamePaused ? 'flex' : 'none';
+        if (this.gamePaused) Overlay.show(this.pauseMenu); else Overlay.hide(this.pauseMenu);
     }
 
     async saveGame() {
@@ -640,7 +693,7 @@ class StarshipGame {
             this.setBackground('space');
             this.launchScreen.style.display  = 'block';
             this.gameContainer.style.display = 'none';
-            this.pauseMenu.style.display     = 'none';
+            Overlay.hide(this.pauseMenu);
         }
     }
 
@@ -714,7 +767,7 @@ class StarshipGame {
         this._displayLocation();
         this._displayRepairQueue();
         // Contacts and market access follow the transceiver's live range.
-        if (this.commsNavScreen.style.display === 'flex') this._renderCommsNavScreen();
+        if (Overlay.isOpen(this.commsNavScreen)) this._renderCommsNavScreen();
     }
 
     // Suffix for a powered device's ON/OFF line when the ship can't supply it.
@@ -1256,7 +1309,7 @@ class StarshipGame {
 
         this._displayCrewIdleNote();
 
-        if (this.crewScreen.style.display === 'flex' && !this._editingCrewId) {
+        if (Overlay.isOpen(this.crewScreen) && !this._editingCrewId) {
             this._renderCrewScreen();
         }
     }
@@ -1287,12 +1340,12 @@ class StarshipGame {
     }
 
     _openCrewScreen() {
-        this.crewScreen.style.display = 'flex';
+        Overlay.show(this.crewScreen);
         this._renderCrewScreen();
     }
 
     _closeCrewScreen() {
-        this.crewScreen.style.display = 'none';
+        Overlay.hide(this.crewScreen);
         this._editingCrewId = null;
     }
 
@@ -1445,12 +1498,72 @@ class StarshipGame {
     // ── Comms & Nav UI ─────────────────────────────────────────────────────
 
     _openCommsNavScreen() {
-        this.commsNavScreen.style.display = 'flex';
+        this._commsShownIds = null; // every contact animates in on open
+        Overlay.show(this.commsNavScreen);
         this._renderCommsNavScreen();
     }
 
     _closeCommsNavScreen() {
-        this.commsNavScreen.style.display = 'none';
+        Overlay.hide(this.commsNavScreen);
+    }
+
+    // ── Motion ──────────────────────────────────────────────────────────────
+    // Entry animations for things that are re-rendered while visible. They use
+    // the Web Animations API rather than CSS so they play exactly when called —
+    // a CSS animation would replay whenever the markup or a class (e.g. the
+    // critical-card pulse) changed. Modal open animations are plain CSS.
+
+    _motionOk() {
+        return Overlay.motionOk();
+    }
+
+    // System cards fade up one after another when the dashboard first appears.
+    _playDashboardIntro() {
+        if (!this._motionOk()) return;
+        document.querySelectorAll('.system-dashboard > .system-card').forEach((card, i) => {
+            card.animate(
+                [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }],
+                { duration: 380, delay: 80 + i * 60, easing: 'cubic-bezier(0.2, 0.8, 0.3, 1)', fill: 'backwards' }
+            );
+        });
+    }
+
+    // Comms & Nav "boot": location cards slide in in sequence and map markers
+    // pop in with a ping ring. Only contacts not already on screen animate, so
+    // opening the screen plays the whole sequence, a contact coming into range
+    // later gets its own entrance, and re-renders (selection, ticks) play nothing.
+    _animateCommsEntries(ids) {
+        const previous = this._commsShownIds;
+        this._commsShownIds = new Set(ids);
+        if (!this._motionOk()) return;
+        const fresh = ids.filter(id => !previous?.has(id));
+        if (!fresh.length) return;
+
+        fresh.forEach((id, i) => {
+            const delay = i * 90;
+            const card = document.querySelector(`#comms-location-list .comms-location-card[data-comms-id="${id}"]`);
+            card?.animate(
+                [{ opacity: 0, transform: 'translateX(-12px)' }, { opacity: 1, transform: 'none' }],
+                { duration: 300, delay, easing: 'ease-out', fill: 'backwards' }
+            );
+            document.querySelectorAll(`#comms-plane-views .comms-marker[data-comms-id="${id}"]`).forEach(marker => {
+                marker.animate(
+                    [{ transform: 'scale(0)' }, { transform: 'scale(1.5)', offset: 0.6 }, { transform: 'scale(1)' }],
+                    { duration: 420, delay: 250 + delay, easing: 'ease-out', fill: 'backwards' }
+                );
+                const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                ring.setAttribute('cx', marker.getAttribute('cx'));
+                ring.setAttribute('cy', marker.getAttribute('cy'));
+                ring.setAttribute('r', '0.3');
+                ring.setAttribute('class', 'comms-ping');
+                ring.style.stroke = getComputedStyle(marker).fill;
+                marker.parentNode.insertBefore(ring, marker);
+                ring.animate(
+                    [{ r: '0.3px', opacity: 0.9 }, { r: '1.6px', opacity: 0 }],
+                    { duration: 800, delay: 300 + delay, easing: 'ease-out', fill: 'both' }
+                ).finished.then(() => ring.remove(), () => ring.remove());
+            });
+        });
     }
 
     // ── Ship Capacity modal ─────────────────────────────────────────────────
@@ -1458,12 +1571,12 @@ class StarshipGame {
     // grow into the buy/sell/adjust-components screen.
 
     _openShipCapacityScreen() {
-        this.shipCapacityScreen.style.display = 'flex';
+        Overlay.show(this.shipCapacityScreen);
         this._displayShipCapacity();
     }
 
     _closeShipCapacityScreen() {
-        this.shipCapacityScreen.style.display = 'none';
+        Overlay.hide(this.shipCapacityScreen);
     }
 
     _selectCommsLocation(id) {
@@ -1511,6 +1624,7 @@ class StarshipGame {
         }
 
         this._renderCommsDetailsPane();
+        this._animateCommsEntries(visible.map(l => l.id));
     }
 
     // This screen is refreshed every tick while open (what's in range follows

@@ -1171,3 +1171,59 @@
     .sound-row { grid-template-columns: 1fr 44px 58px; }
     .sound-row-label { grid-column: 1 / -1; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   MOTION — short entry animations
+   Modals: pure CSS. Every overlay is shown by flipping display none → flex,
+   which restarts these animations, so they play on each open and never
+   on the per-tick refresh.
+   Dashboard cards and Comms & Nav contacts are animated from main.js with
+   the Web Animations API instead (_playDashboardIntro / _animateCommsEntries),
+   because their classes and markup are rebuilt while visible and a CSS
+   animation there would replay on every rebuild.
+   ══════════════════════════════════════════════════════════════════════ */
+.overlay-screen,
+.pause-menu,
+.intro-overlay {
+    animation: scrim-in 0.18s ease-out;
+}
+.overlay-card,
+.pause-card,
+.intro-content,
+.seed-card {
+    animation: card-pop 0.24s cubic-bezier(0.2, 0.8, 0.3, 1.1);
+}
+@keyframes scrim-in {
+    from { opacity: 0; }
+}
+@keyframes card-pop {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+}
+
+/* Comms & Nav: one scan line sweeps the plane views when the screen opens.
+   The container persists across re-renders, so it only replays on open. */
+.comms-plane-views { position: relative; overflow: hidden; }
+.comms-plane-views::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: -40px;
+    height: 40px;
+    background: linear-gradient(180deg, transparent, rgba(0, 198, 255, 0.18) 70%, rgba(0, 198, 255, 0.45));
+    pointer-events: none;
+    opacity: 0;
+    animation: comms-scan 1.1s ease-in-out 0.1s;
+}
+@keyframes comms-scan {
+    0%   { opacity: 0; top: -40px; }
+    15%  { opacity: 1; }
+    85%  { opacity: 1; }
+    100% { opacity: 0; top: 100%; }
+}
+.comms-marker { transform-box: fill-box; transform-origin: center; }
+.comms-ping { fill: none; stroke-width: 0.06; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    .overlay-screen, .pause-menu, .intro-overlay,
+    .overlay-card, .pause-card, .intro-content, .seed-card,
+    .comms-plane-views::after { animation: none; }
+}
