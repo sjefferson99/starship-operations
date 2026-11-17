@@ -11,7 +11,7 @@ const db   = require('./db.js');
 
 const ROOT     = __dirname;
 const SAVE_DIR = path.join(ROOT, 'savegame');
-const PORT     = 3001;
+const PORT     = Number(process.env.PORT) || 3001;
 
 // GAME_DB_PATH lets tests point at an isolated, throwaway database instead of
 // the real save — see playwright.config.js.
@@ -36,6 +36,11 @@ function serveStatic(res, filePath) {
         res.writeHead(200, { 'Content-Type': contentType });
         res.end(data);
     });
+}
+
+function sendJson(res, status, body) {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
 }
 
 function readJsonBody(req, onDone) {
@@ -90,6 +95,50 @@ const server = http.createServer((req, res) => {
         } else {
             res.writeHead(405); res.end();
         }
+        return;
+    }
+
+    // ── Rewind checkpoints (docs/rewind-readiness.md) ───────────────────────
+    const checkpointsMatch = url.match(/^\/api\/saves\/(\d+)\/checkpoints$/);
+    if (checkpointsMatch) {
+        const saveId = Number(checkpointsMatch[1]);
+        if (req.method === 'GET') {
+            sendJson(res, 200, db.listCheckpoints(database, saveId));
+        } else if (req.method === 'POST') {
+            readJsonBody(req, (err, json) => {
+                if (err) return sendJson(res, 400, { error: 'Invalid JSON' });
+                if (!db.CHECKPOINT_KINDS.includes(json?.kind) || !json?.world) {
+                    return sendJson(res, 400, { error: 'A known kind and a world snapshot are required' });
+                }
+                try {
+                    const created = db.addCheckpoint(database, saveId, json.kind, json);
+                    if (!created) return sendJson(res, 404, { error: 'No save found' });
+                    sendJson(res, 201, created);
+                } catch {
+                    sendJson(res, 500, { error: 'Checkpoint failed' });
+                }
+            });
+        } else {
+            res.writeHead(405); res.end();
+        }
+        return;
+    }
+
+    const restoreMatch = url.match(/^\/api\/saves\/(\d+)\/checkpoints\/(\d+)\/restore$/);
+    if (restoreMatch) {
+        if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+        const saveId = Number(restoreMatch[1]);
+        const checkpointId = Number(restoreMatch[2]);
+        readJsonBody(req, (err, json) => {
+            if (err) return sendJson(res, 400, { error: 'Invalid JSON' });
+            try {
+                const payload = db.restoreCheckpoint(database, saveId, checkpointId, json?.current ?? null);
+                if (!payload) return sendJson(res, 404, { error: 'No such checkpoint' });
+                sendJson(res, 200, payload);
+            } catch {
+                sendJson(res, 500, { error: 'Going back failed' });
+            }
+        });
         return;
     }
 

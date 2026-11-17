@@ -86,6 +86,9 @@ class StarshipGame {
 
         // Comms & Nav: seeded sector roster (current location + discovered points of interest)
         this.commsSeed      = null;
+        // Gameplay randomness. Seeded from the sector seed in startNewGame(),
+        // and its state is saved and restored with the game (rng.js).
+        this.rng            = new GameRng(0);
         this.commsLocations = [];
         this._selectedCommsId = null;
         this._pendingSeed     = null; // chosen on the seed screen, consumed by startNewGame()
@@ -116,6 +119,7 @@ class StarshipGame {
         this.repairManager = new RepairManager(this);
         this.systemUpdate   = new SystemUpdate(this);
         this.tour           = new Tour(this);
+        this.timeline       = new Timeline(this);
         this._bindEvents();
         this._loadShipDatabases();
         this.setBackground('space');
@@ -214,6 +218,7 @@ class StarshipGame {
         document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
         document.getElementById('save-btn').addEventListener('click',      () => this.saveGame());
+        document.getElementById('timeline-btn').addEventListener('click',  () => this.timeline.open());
         document.getElementById('export-btn').addEventListener('click',    () => GameState.exportFile(this));
         document.getElementById('main-menu-btn').addEventListener('click', () => this.returnToMainMenu());
 
@@ -268,7 +273,11 @@ class StarshipGame {
         );
 
         document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && this.gameActive) this.togglePause();
+            if (e.key !== 'Escape') return;
+            // The Timeline sits on top of the pause menu (and of GAME OVER):
+            // Escape closes it first.
+            if (this.timeline.isOpen()) { this.timeline.close(); return; }
+            if (this.gameActive) this.togglePause();
         });
     }
 
@@ -411,10 +420,15 @@ class StarshipGame {
         this.systems                = this._defaultSystems();
         this.repairQueue            = [];
         this._selectedCommsId       = null;
+        // One seed drives everything: the sector layout and, on a separate
+        // stream, every gameplay roll after it. Seed the RNG before the
+        // roster is rolled.
+        const seed = this._pendingSeed ?? this.commsNav.rollSeed(); // chosen on the seed screen before the intro
+        this._pendingSeed           = null;
+        this.rng                    = GameRng.fromSeed(seed);
         this.crewManager.resetRoster();
         this.crew                   = this.crewManager.aliveCount();
-        this.commsNav.generate(this._pendingSeed); // chosen on the seed screen before the intro
-        this._pendingSeed           = null;
+        this.commsNav.generate(seed);
 
         this._resetPauseMenuUI();
         this._applySpeedUI();
@@ -426,7 +440,8 @@ class StarshipGame {
         this._startTimer();
         this._startAutosaveTimer();
         this.updateDisplay();
-        this.saveGame(); // persist the freshly-created slot immediately
+        this.timeline.resetClock();
+        this._saveWithCheckpoint('start'); // persist the freshly-created slot immediately
         this.tour.maybeAutoStart(); // first-time players only — see Tour
     }
 
@@ -512,6 +527,7 @@ class StarshipGame {
             this._startTimer();
             this._startAutosaveTimer();
             this.updateDisplay();
+            this.timeline.onGameLoaded();
         } catch (e) { alert('Could not load save: ' + e.message); }
     }
 
@@ -665,13 +681,41 @@ class StarshipGame {
         if (this.gamePaused) Overlay.show(this.pauseMenu); else Overlay.hide(this.pauseMenu);
     }
 
-    async saveGame() {
+    saveGame() {
+        return this._saveWithCheckpoint('save');
+    }
+
+    // Saves the game, then marks the moment on the timeline (timeline.js).
+    async _saveWithCheckpoint(kind) {
         try {
             await GameState.saveServer(this);
             this._showSaveStatus('Saved');
         } catch (e) {
             this._showSaveStatus('Save failed — is server.js running?', true);
+            return;
         }
+        await this.timeline.checkpoint(kind);
+    }
+
+    // The Timeline has just put an earlier checkpoint's state onto the game
+    // (GameState.restore). Bring everything else in line with it. The game is
+    // left paused on the pause menu, so the player resumes when ready. This
+    // also revives a game that had ended in GAME OVER.
+    afterRewind() {
+        this._repairTargets   = {};
+        this._selectedCommsId = null;
+        this.crew             = this.crewManager.aliveCount();
+        this.gameActive       = true;
+        this.gamePaused       = true;
+        this._resetPauseMenuUI();
+        Overlay.show(this.pauseMenu);
+        this._applySpeedUI();
+        this._syncTargetInputs();
+        this._updateShipIdentityUI();
+        this._startTimer();
+        this._startAutosaveTimer();
+        this.updateDisplay();
+        this._showSaveStatus('Went back on the timeline');
     }
 
     async _autosave() {
@@ -722,6 +766,7 @@ class StarshipGame {
             this.systemUpdate.update(this.gameSpeed);
             this.updateDisplay();
             this.tour.checkTips();
+            this.timeline.maybeCheckpoint();
         }, 1000);
     }
 

@@ -34,6 +34,10 @@ class GameState {
                 market: game.market ?? [],
             },
 
+            // Where the gameplay RNG is in its sequence, so the rolls after a
+            // load match the rolls the game would have made without saving.
+            rng: { state: game.rng?.state ?? null },
+
             shipInstanceId: game.shipInstanceId ?? 'player-ship-1',
 
             environment: {
@@ -128,6 +132,11 @@ class GameState {
         game.credits   = world.world.credits;
         game.gameSpeed = world.world.gameSpeed;
         game.crew      = world.crew.count;
+        // Saves from before the seeded RNG have no state: start one from the
+        // sector seed, or a fresh roll if that's missing too.
+        game.rng = world.rng?.state != null
+            ? new GameRng(world.rng.state)
+            : GameRng.fromSeed(world.comms?.seed ?? game.commsNav.rollSeed());
         game.crewManager.applySavedRoster(world.crew.members ?? []);
         game.commsSeed      = world.comms?.seed ?? null;
         game.commsLocations = world.comms?.locations ?? [];
@@ -251,6 +260,41 @@ class GameState {
         if (resp.status === 404) throw new Error('Save not found.');
         if (!resp.ok) throw new Error('Server responded ' + resp.status);
 
+        const { world, shipInstances } = await resp.json();
+        GameState.restore(game, world, shipInstances);
+    }
+
+    // ── Rewind checkpoints (docs/rewind-readiness.md) ─────────────────────
+    // A tree of full snapshots per save, kept by the server. Each checkpoint is
+    // the same {world, shipInstances} payload a save sends.
+
+    static async addCheckpoint(game, kind) {
+        const resp = await fetch(`/api/saves/${game.saveId}/checkpoints`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ kind, world: GameState.snapshot(game), shipInstances: GameState.shipInstanceSnapshot(game) }),
+        });
+        if (!resp.ok) throw new Error('Checkpoint failed — server responded ' + resp.status);
+        return resp.json(); // { id }
+    }
+
+    static async listCheckpoints(saveId) {
+        const resp = await fetch(`/api/saves/${saveId}/checkpoints`);
+        if (!resp.ok) throw new Error('Could not list checkpoints — server responded ' + resp.status);
+        return resp.json(); // { headId, checkpoints: [{ id, parentId, gameTime, kind, credits, crewCount, createdAt }] }
+    }
+
+    // Goes back to a checkpoint. The server keeps the state being left as a
+    // branch end, makes the checkpoint the live save, and returns it. Then it's
+    // applied here.
+    static async restoreCheckpoint(game, checkpointId) {
+        const current = { world: GameState.snapshot(game), shipInstances: GameState.shipInstanceSnapshot(game) };
+        const resp = await fetch(`/api/saves/${game.saveId}/checkpoints/${checkpointId}/restore`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ current }),
+        });
+        if (!resp.ok) throw new Error('Could not go back — server responded ' + resp.status);
         const { world, shipInstances } = await resp.json();
         GameState.restore(game, world, shipInstances);
     }

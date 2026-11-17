@@ -1227,3 +1227,46 @@
     .overlay-card, .pause-card, .intro-content, .seed-card,
     .comms-plane-views::after { animation: none; }
 }
+
+/* ── Timeline (rewind checkpoints, timeline.js) ── */
+.timeline-screen { z-index: 1100; } /* opens on top of the pause menu */
+.timeline-card { max-width: 720px; }
+.timeline-tree {
+    overflow: auto;
+    max-height: 46vh;
+    min-height: 90px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(0, 150, 255, 0.18);
+    border-radius: 10px;
+    padding: 8px;
+}
+.timeline-svg { display: block; }
+.timeline-link { fill: none; stroke: rgba(79, 195, 247, 0.45); stroke-width: 2; }
+.timeline-link-live { stroke-dasharray: 4 4; }
+.timeline-day { fill: #78909c; font-size: 10px; text-anchor: middle; }
+.timeline-node { cursor: pointer; stroke: rgba(0, 0, 0, 0.5); stroke-width: 1; }
+.timeline-node:hover { stroke: #e0f7fa; stroke-width: 2; }
+.timeline-node-start      { fill: #e0f7fa; }
+.timeline-node-hourly     { fill: #4fc3f7; }
+.timeline-node-save       { fill: #66bb6a; }
+.timeline-node-live       { fill: #ba68c8; }
+.timeline-node-selected   { stroke: #ffffff; stroke-width: 2.5; }
+/* "Left off" is a hollow orange ring (dark fill keeps the middle clickable).
+   It stays orange when hovered or selected; a glow shows those states instead. */
+.timeline-node-branch-end,
+.timeline-node-branch-end:hover,
+.timeline-node-branch-end.timeline-node-selected { fill: #0a1430; stroke: #ffa726; stroke-width: 2.5; }
+.timeline-node-branch-end:hover                  { filter: drop-shadow(0 0 3px #ffa726); }
+.timeline-node-branch-end.timeline-node-selected { filter: drop-shadow(0 0 3px #ffffff); }
+.timeline-here-ring { fill: none; stroke: #ba68c8; stroke-width: 1.5; pointer-events: none; }
+.timeline-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.7rem; color: #90a4ae; }
+.timeline-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.timeline-key { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.timeline-key-start      { background: #e0f7fa; }
+.timeline-key-hourly     { background: #4fc3f7; }
+.timeline-key-save       { background: #66bb6a; }
+.timeline-key-branch-end { background: transparent; border: 2px solid #ffa726; box-sizing: border-box; }
+.timeline-key-live       { background: #ba68c8; }
+.timeline-details { min-height: 54px; }
+.timeline-details .task-empty { padding: 0; flex: 1; }
+.timeline-here-note { font-size: 0.76rem; color: #ba68c8; font-weight: 600; }

@@ -600,6 +600,7 @@
             <div class="pause-options">
                 <button id="resume-btn">Resume Game</button>
                 <button id="save-btn">Save Game</button>
+                <button id="timeline-btn">Timeline</button>
                 <button id="export-btn">Export Save File</button>
                 <button id="main-menu-btn">Main Menu</button>
             </div>
@@ -623,6 +624,25 @@
             <ul id="repair-queue-list" class="overlay-list">
                 <li class="task-empty">No repair tasks queued.</li>
             </ul>
+        </div>
+    </div>
+
+    <div id="timeline-screen" class="overlay-screen timeline-screen" style="display: none;">
+        <div class="overlay-card timeline-card">
+            <div class="overlay-header">
+                <h2>Timeline</h2>
+                <button id="timeline-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+            <p class="repair-crew-status">Go back to an earlier point and try something else. Nothing is lost: the line you leave stays here, and you can return to it.</p>
+            <div id="timeline-tree" class="timeline-tree"></div>
+            <div class="timeline-legend">
+                <span><i class="timeline-key timeline-key-start"></i>Start</span>
+                <span><i class="timeline-key timeline-key-hourly"></i>Hourly</span>
+                <span><i class="timeline-key timeline-key-save"></i>Saved</span>
+                <span><i class="timeline-key timeline-key-branch-end"></i>Left off</span>
+                <span><i class="timeline-key timeline-key-live"></i>Now</span>
+            </div>
+            <div id="timeline-details" class="save-card timeline-details"></div>
         </div>
     </div>
 
@@ -765,12 +785,14 @@
         </div>
     </div>
 
+    <script src="rng.js"></script>
     <script src="game_state.js"></script>
     <script src="system_update.js"></script>
     <script src="repair_manager.js"></script>
     <script src="crew_manager.js"></script>
     <script src="comms_nav.js"></script>
     <script src="tour.js"></script>
+    <script src="timeline.js"></script>
     <script src="main.js"></script>
     <!-- After main.js on purpose: sound.js observes the game main.js creates (see its header comment). -->
     <script src="sound.js"></script>

@@ -286,6 +286,32 @@ const MIGRATIONS = [
     db => {
         db.exec('ALTER TABLE repair_tasks ADD COLUMN target_pct REAL;');
     },
+    // Seeded gameplay RNG: where its sequence is, so loading a save carries on
+    // with the same rolls (rng.js, docs/rewind-readiness.md).
+    db => {
+        db.exec('ALTER TABLE saves ADD COLUMN rng_state INTEGER;');
+    },
+    // Rewind checkpoints (docs/rewind-readiness.md): a tree per save. Each row
+    // holds a full {world, shipInstances} payload as JSON, plus its parent.
+    // saves.head_checkpoint_id is the checkpoint the live state grew from,
+    // which becomes the parent of the next checkpoint.
+    db => {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS save_checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                save_id INTEGER NOT NULL,
+                parent_id INTEGER,
+                game_time REAL,
+                created_at TEXT,
+                kind TEXT,
+                credits REAL,
+                crew_count INTEGER,
+                payload TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_save_checkpoints_save ON save_checkpoints (save_id);
+            ALTER TABLE saves ADD COLUMN head_checkpoint_id INTEGER;
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -356,7 +382,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -396,6 +422,7 @@ function getSave(db, saveId) {
         world: { gameTime: save.game_time, credits: save.credits, gameSpeed: save.game_speed },
         crew: { count: save.crew_count, members: crewMembers },
         comms: { seed: save.comms_seed, locations: commsLocations, market },
+        rng: { state: save.rng_state ?? null },
         shipInstanceId: save.ship_instance_id,
         environment: {
             inBreathableAtmosphere: !!save.in_breathable_atmosphere,
@@ -465,13 +492,25 @@ function _composeShip(db, saveId, shipRow) {
     };
 }
 
-function saveSave(db, saveId, { world, shipInstances }) {
+function saveSave(db, saveId, payload) {
     db.exec('BEGIN');
     try {
+        _writeSave(db, saveId, payload);
+        db.exec('COMMIT');
+    } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+    }
+}
+
+// saveSave's body without its own transaction, so restoreCheckpoint can write
+// the live state as part of its transaction.
+function _writeSave(db, saveId, { world, shipInstances }) {
         db.prepare(`
             UPDATE saves SET
                 updated_at = ?, version = ?, game_time = ?, credits = ?, game_speed = ?,
-                crew_count = ?, ship_instance_id = ?, in_breathable_atmosphere = ?, vents_open = ?, comms_seed = ?
+                crew_count = ?, ship_instance_id = ?, in_breathable_atmosphere = ?, vents_open = ?, comms_seed = ?,
+                rng_state = ?
             WHERE id = ?
         `).run(
             new Date().toISOString(), world?.version ?? null,
@@ -479,6 +518,7 @@ function saveSave(db, saveId, { world, shipInstances }) {
             world?.crew?.count ?? null, world?.shipInstanceId ?? null,
             world?.environment?.inBreathableAtmosphere ? 1 : 0, world?.environment?.ventsOpen ? 1 : 0,
             world?.comms?.seed ?? null,
+            world?.rng?.state ?? null,
             saveId
         );
 
@@ -486,7 +526,135 @@ function saveSave(db, saveId, { world, shipInstances }) {
         _saveCrewMembers(db, saveId, world?.crew?.members ?? []);
         _saveCommsLocations(db, saveId, world?.comms?.locations ?? []);
         _saveMarketListings(db, saveId, world?.comms?.market ?? []);
+}
+
+// ── Rewind checkpoints ──────────────────────────────────────────────────────
+// A tree of full-state snapshots per save. Going back never loses anything:
+// the state being left is kept as a 'branch-end', and checkpoints made after
+// going back are added under the checkpoint you went back to.
+
+const CHECKPOINT_KINDS = ['start', 'hourly', 'save', 'branch-end'];
+const CHECKPOINT_RECENT_S = 86400; // every hourly checkpoint within a game day of the newest is kept
+
+function _insertCheckpoint(db, saveId, parentId, kind, payload) {
+    const result = db.prepare(`
+        INSERT INTO save_checkpoints (save_id, parent_id, game_time, created_at, kind, credits, crew_count, payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        saveId, parentId ?? null,
+        payload?.world?.world?.gameTime ?? 0, new Date().toISOString(), kind,
+        payload?.world?.world?.credits ?? null, payload?.world?.crew?.count ?? null,
+        JSON.stringify({ world: payload?.world ?? null, shipInstances: payload?.shipInstances ?? null })
+    );
+    return Number(result.lastInsertRowid);
+}
+
+function _headCheckpointId(db, saveId) {
+    return db.prepare('SELECT head_checkpoint_id AS head FROM saves WHERE id = ?').get(saveId)?.head ?? null;
+}
+
+function _setHead(db, saveId, checkpointId) {
+    db.prepare('UPDATE saves SET head_checkpoint_id = ? WHERE id = ?').run(checkpointId, saveId);
+}
+
+// Thins the line leading to `newestId`: hourly checkpoints more than a game
+// day older than it are cut down to the earliest one of each game day. Start,
+// manual saves, branch ends and branch points (more than one child) are always
+// kept. A removed checkpoint's only child is re-attached to the removed
+// checkpoint's parent, so the tree stays connected.
+function _pruneCheckpoints(db, saveId, newestId) {
+    const rows = db.prepare('SELECT id, parent_id, game_time, kind FROM save_checkpoints WHERE save_id = ?').all(saveId);
+    const byId = new Map(rows.map(r => [r.id, { ...r }]));
+    const childCount = new Map();
+    rows.forEach(r => { if (r.parent_id != null) childCount.set(r.parent_id, (childCount.get(r.parent_id) ?? 0) + 1); });
+
+    const newest = byId.get(newestId);
+    if (!newest) return;
+
+    const chain = []; // root first, ending with `newest`
+    const seen = new Set([newestId]);
+    for (let p = byId.get(newest.parent_id); p && !seen.has(p.id); p = byId.get(p.parent_id)) {
+        seen.add(p.id);
+        chain.unshift(p);
+    }
+    chain.push(newest);
+
+    const keptDays = new Set();
+    const reparent = db.prepare('UPDATE save_checkpoints SET parent_id = ? WHERE id = ?');
+    const remove   = db.prepare('DELETE FROM save_checkpoints WHERE id = ?');
+    for (let i = 0; i < chain.length - 1; i++) {
+        const cp = chain[i];
+        if (cp.kind !== 'hourly') continue;
+        if (newest.game_time - cp.game_time < CHECKPOINT_RECENT_S) continue;
+        if ((childCount.get(cp.id) ?? 0) > 1) continue;
+        const day = Math.floor(cp.game_time / 86400);
+        if (!keptDays.has(day)) { keptDays.add(day); continue; }
+
+        const child = chain[i + 1];
+        reparent.run(cp.parent_id, child.id);
+        child.parent_id = cp.parent_id;
+        remove.run(cp.id);
+    }
+}
+
+// Adds a checkpoint after the current head and makes it the new head.
+// Returns null if the save doesn't exist.
+function addCheckpoint(db, saveId, kind, payload) {
+    if (!CHECKPOINT_KINDS.includes(kind)) throw new Error('Unknown checkpoint kind');
+    if (!db.prepare('SELECT 1 FROM saves WHERE id = ?').get(saveId)) return null;
+    db.exec('BEGIN');
+    try {
+        const id = _insertCheckpoint(db, saveId, _headCheckpointId(db, saveId), kind, payload);
+        _setHead(db, saveId, id);
+        _pruneCheckpoints(db, saveId, id);
         db.exec('COMMIT');
+        return { id };
+    } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+    }
+}
+
+// The tree without its payloads, for drawing the timeline.
+function listCheckpoints(db, saveId) {
+    const rows = db.prepare(`
+        SELECT id, parent_id, game_time, created_at, kind, credits, crew_count
+        FROM save_checkpoints WHERE save_id = ? ORDER BY game_time, id
+    `).all(saveId);
+    return {
+        headId: _headCheckpointId(db, saveId),
+        checkpoints: rows.map(r => ({
+            id: r.id, parentId: r.parent_id, gameTime: r.game_time, createdAt: r.created_at,
+            kind: r.kind, credits: r.credits, crewCount: r.crew_count,
+        })),
+    };
+}
+
+// Goes back to `checkpointId`, all in one transaction. First `current` (the
+// live state being left) is kept as a 'branch-end' after the head, unless it's
+// still at the head's exact game time (nothing played since). Then the
+// checkpoint's payload becomes the live save, and the checkpoint becomes the
+// head, so play from here starts a new branch under it. Returns that payload,
+// or null if the checkpoint isn't one of this save's.
+function restoreCheckpoint(db, saveId, checkpointId, current) {
+    const target = db.prepare('SELECT payload FROM save_checkpoints WHERE id = ? AND save_id = ?').get(checkpointId, saveId);
+    if (!target) return null;
+    const payload = JSON.parse(target.payload);
+
+    db.exec('BEGIN');
+    try {
+        const headId = _headCheckpointId(db, saveId);
+        const head = headId != null
+            ? db.prepare('SELECT game_time FROM save_checkpoints WHERE id = ?').get(headId)
+            : null;
+        const currentTime = current?.world?.world?.gameTime;
+        if (current?.world && !(head && head.game_time === currentTime)) {
+            _insertCheckpoint(db, saveId, headId, 'branch-end', current);
+        }
+        _writeSave(db, saveId, payload);
+        _setHead(db, saveId, checkpointId);
+        db.exec('COMMIT');
+        return payload;
     } catch (e) {
         db.exec('ROLLBACK');
         throw e;
@@ -600,4 +768,5 @@ module.exports = {
     initDb,
     listSaves, createSave, deleteSave,
     getSave, saveSave,
+    addCheckpoint, listCheckpoints, restoreCheckpoint, CHECKPOINT_KINDS,
 };
