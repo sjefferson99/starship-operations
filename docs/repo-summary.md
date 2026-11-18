@@ -1,104 +1,195 @@
 # Repository Summary
 
 ### 1. Repository Overview
-- Purpose: Browser dashboard game — player keeps a starship's life-support and power systems running, manages module wear/repair via a crew-limited task queue, and progresses a short narrative intro.
-- Architectural style: Client-heavy monolith. No client framework/bundler; a minimal same-process Node HTTP server provides only static-file serving plus two JSON read/write routes for persistence.
-- Runtime environment: Node.js (server.js, built-ins only — no npm runtime deps); browser-executed plain JavaScript (ES2015 classes, classic `<script>` tags, shared global scope, no modules/bundler).
+- Purpose: browser dashboard game. Keep a worn-out salvage ship and its crew alive, repair and trade salvage, and get the ship flying from a salvage yard to a spaceport.
+- Architectural style: client-heavy monolith. The browser holds all game logic in global classes with no bundler. A minimal Node HTTP server provides static files plus a JSON save/checkpoint API over SQLite.
+- Runtime environment: Node.js (`server.js`, `db.js`, built-in `node:sqlite`, no runtime npm deps). Browser plain JavaScript (classic `<script>` tags, shared global scope).
 
 ---
 
 ### 2. Core Components
-- **Game Orchestrator** — `StarshipGame` class — owns game state, DOM rendering, event bindings, the tick loop. Key files: `main.js`
-- **Tick Physics Engine** — `SystemUpdate` class — per-tick O2/CO2/power/fuel simulation, consumes repair efficiency. Key files: `system_update.js`
-- **Repair Domain Logic** — `RepairManager` class — module decay curve, crew-shift gating, repair task queue. Key files: `repair_manager.js`
-- **Persistence** — `GameState` class — snapshot/restore world+ship state via the server API, plus file export/import. Key files: `game_state.js`
-- **Dev/Static Server** — plain Node `http` server — serves all static assets, exposes `/api/save` and `/api/ship-instances`. Key files: `server.js`
-- **Reference & Live Data** — flat JSON files, no database. Key files: `data/ship_classes.json`, `data/ship_instances.json`, `data/module_specs.json`, `data/crew_manifest.json`, `data/story_messages.json`
-- **UI Shell** — single HTML page, screens toggled via inline `display`. Key files: `index.html`, `styles.css` (`@import`s `css/*.css`)
-- **E2E Tests** — Playwright specs driving the real browser UI via a `window.game` test seam. Key files: `tests/repair.spec.js`, `playwright.config.js`
+- **Game orchestrator**: `StarshipGame` owns live state, the 1 s tick loop, all DOM rendering and event wiring, plus overlay screens and save/load flows. Key files: `main.js`
+- **Physics tick**: `SystemUpdate` runs the per-tick simulation:
+  - power budget, O2, CO2, transceiver;
+  - food (meals), water and the black-water loop;
+  - power/fuel and dock charging.
+  - It then calls the other domains' `update(dt)`.
+  - Key files: `system_update.js`
+- **Repairs and work queue**: `RepairManager` handles module wear, staged repairs, the repair→output curve, crew-shift gating, and a work queue shared with fabrication and strip jobs. Key files: `repair_manager.js`
+- **Crew**: `CrewManager` keeps the live roster merged from a template, and the health model (atmosphere, overwork, starvation, sewage exposure, infection) behind work effectiveness. Key files: `crew_manager.js`
+- **Fabrication and cargo**: `Fabrication` handles supplies, storage/machine boxes, food rations, composting, fabrication recipes, and module resale with market flooding. Key files: `fabrication.js`
+- **Logistics**: `Logistics` covers:
+  - yard/port berth and flight;
+  - transfer drones, two-way run plans, drone docks and charging;
+  - the port hold, stripping wrecked drives, and the room-aboard checks.
+  - Key files: `logistics.js`
+- **Comms & Nav**: `CommsNav` generates the seeded sector, decides transceiver visibility, holds the market and purchase rules, and restocks drone-sized salvage. Key files: `comms_nav.js`
+- **Persistence (client)**: `GameState` snapshots and restores the whole game, calls the REST API for saves and checkpoints, and does file export/import. Key files: `game_state.js`
+- **Persistence (server)**: `db.js` has the schema-versioned SQLite migrations, named save slots, and a checkpoint tree with pruning and restore. Key files: `db.js`, `server.js`
+- **Rewind UI**: `Timeline` takes hourly/start/save checkpoints and draws a rolled-up tree to go back to. Key files: `timeline.js`, `docs/rewind-readiness.md`
+- **Seeded RNG**: `GameRng` (mulberry32) has saveable state; every gameplay roll goes through it. Key files: `rng.js`
+- **Guidance**: `Tour` runs the first-run guided tour plus priority-ordered contextual tips on one spotlight card. Key files: `tour.js`
+- **Observers**: `Notifications` (an event list from state diffs) and `SoundManager` (Web Audio synthesis from state diffs and UI clicks). Key files: `notifications.js`, `sound.js`
+- **Callout positioning**: `Anchor` keeps floating messages fixed beside their target element. Key files: `anchor.js`
+- **UI shell**: a single HTML page (dashboard card skeletons plus overlay screens) and CSS split into four imported sheets. Key files: `index.html`, `styles.css`, `css/*.css`
+- **E2E tests**: Playwright specs driving the real page through the exposed `window.game`, plus direct `db.js` unit specs. Key files: `tests/`, `playwright.config.js`
 
 ---
 
 ### 3. File Index
-**Backend**
-- `server.js` — Node `http` server; static file passthrough + `GET/POST /api/ship-instances`, `GET/POST/HEAD /api/save`
+**API / backend**
+- `server.js` — Node `http` server: static files (path-traversal guarded) and the `/api/saves…` JSON routes; `PORT`, `GAME_DB_PATH` env.
 
 **Frontend / UI**
-- `index.html` — single page; launch/intro/dashboard/pause/task-queue screens as sibling `<div>`s
-- `main.js` — `StarshipGame`: game loop, DOM rendering, event wiring, repair UI, drag-reorder
-- `styles.css`, `css/base.css`, `css/dashboard.css`, `css/menu.css`, `css/backgrounds.css` — visual styling
+- `index.html` — single page: launch, seed and intro screens; dashboard card groups; overlays (work queue, timeline, load, crew, comms & nav, ship capacity, drone run plan, cargo, sounds, pause). Loads the scripts in a fixed order.
+- `main.js` — `Overlay` helper and `StarshipGame`: tick loop, `updateDisplay()` full re-render, card layout, all click handlers, the market/cargo/plan-run screens, saves, autosave; exposes `window.game`.
+- `anchor.js` — `Anchor.attach/detach`: re-measures fixed-position callouts against their target every animation frame.
+- `tour.js` — `Tour`: guided tour steps (`_buildSteps`) and contextual tips (`_buildTips`); seen-state in `localStorage`.
+- `timeline.js` — `Timeline`: checkpoint timing, the rewind screen's SVG tree with month/week/day roll-up, and going back.
+- `notifications.js` — `Notifications`: header pill and list; diffs state each redraw; direct `add()` for events with no state to diff.
+- `sound.js` — `SoundManager`: synthesised UI/effect/alert/hum sounds, per-channel volume in `localStorage`; observer only, loaded after `main.js`.
+- `styles.css` — entry stylesheet, `@import`s the four sheets below.
+- `css/base.css` — reset and body layout.
+- `css/backgrounds.css` — `body[data-bg]` themes: `space`, `city` (salvage yard), `port`, `flight` (animated); inline SVG layers.
+- `css/menu.css` — launch screen, intro modal, pause overlay.
+- `css/dashboard.css` — dashboard, fixed-height cards and groups, overlays, work queue columns, plan-run, market and cargo styles.
+- `assets/ships/vagrant-mk1.svg` — ship illustration (intro, header thumbnail, capacity screen).
 
-**Data**
-- `data/ship_classes.json` — static ship blueprint specs (tiers, crew bounds)
-- `data/ship_instances.json` — live per-ship system state + `repairQueue[]`
-- `data/module_specs.json` — per-tier output/power-draw/degradation/repair-band specs
-- `data/crew_manifest.json` — crew roster, classes, shift hours
-- `data/story_messages.json` — narrative intro text (keyed by event name, e.g. `new-game`)
-- `savegame/save.json` — world-state save file, written by `server.js`
+**Data / database**
+- `db.js` — SQLite schema (`MIGRATIONS` array, `meta.schema_version`), save CRUD, per-ship and per-save table writers/readers, the checkpoint tree.
+- `data/module_specs.json` — per-module, per-tier specs (power, output, mass/volume, `repairStages`), drives, `transferDrone`, `droneDock`.
+- `data/ship_classes.json` — ship class blueprint (`version`, `classes`).
+- `data/crew_manifest.json` — crew template (`id`, `classes`, `shifts`).
+- `data/story_messages.json` — intro narrative keyed `new-game`.
+- `data/ship_instances.json` — legacy flat ship state; not fetched or read by any code.
+- `savegame/.gitkeep` — keeps the save directory; `savegame/game.db` (gitignored) is the live database.
 
 **Infrastructure / config**
-- `package.json`, `package-lock.json` — npm metadata; sole dependency is the dev-only `@playwright/test`
-- `playwright.config.js` — e2e test runner config, auto-launches `server.js`
-- `.gitignore`
+- `package.json` — `start` (`node --no-warnings server.js`) and `test` (`playwright test`) scripts; only dev dep `@playwright/test`.
+- `package-lock.json` — npm lockfile.
+- `playwright.config.js` — `testDir: ./tests`; starts `server.js` with `PORT` from `TEST_PORT` (default 3001) and `GAME_DB_PATH=test-results/test-game.db`; `reuseExistingServer: !process.env.CI`.
+- `.gitignore` — ignores `node_modules/`, `test-results/`, Playwright reports and cache, `savegame/game.db`.
 
 **Core logic / domain**
-- `system_update.js` — `SystemUpdate`: per-tick O2/CO2/power/fuel physics
-- `repair_manager.js` — `RepairManager`: decay, efficiency curve, repair queue processing
-- `game_state.js` — `GameState`: save/load/export/import (client-side serialization only)
+- `system_update.js` — `SystemUpdate`: physics and the order of the per-tick update; game-over check.
+- `repair_manager.js` — `RepairManager`: decay, `efficiencyFor`, staged repair tasks, `processQueue`; unit keys for fitted modules, `box:<id>` and `drone:<id>`.
+- `crew_manager.js` — `CrewManager`: roster merge, health impacts, availability, effectiveness, death.
+- `fabrication.js` — `Fabrication`: items, boxes, food storage and eating, compost, recipes and fabrication jobs, machine-box modules, swap, resale value and flooding.
+- `logistics.js` — `Logistics`: berth/flight, drones (buy, berth, launch, legs, charge, wear), `plan`/`planOut`, port hold orders and delivery, strip jobs, dock charging demand, capacity rows.
+- `comms_nav.js` — `CommsNav`: seeded sector generation, range/visibility, market generation and restock, purchase rules, fitting modules.
 
 **Utilities / shared**
-- None — no shared-utility module exists; each class above is self-contained.
+- `rng.js` — `mulberry32(seed)` PRNG and `GameRng`, a wrapper whose state is saved with the game.
+- `game_state.js` — `GameState`: `snapshot`/`shipInstanceSnapshot`/`restore` with legacy defaults; REST calls; JSON export/import.
 
-**Tests**
-- `tests/repair.spec.js` — e2e coverage for repair decay, bands, shift-gated queue progress, cancel, both replacement outcomes, and the 2dp power-output regression
+**Docs**
+- `README.md` — player-facing intro and early-concept status.
+- `CLAUDE.md` — contributor and agent guidance: commands, architecture, invariants.
+- `docs/rewind-readiness.md` — how rewind works and the rules for keeping new state compatible with it.
+- `docs/repo-analysis-prompt.md` — the process that regenerates this file.
+- `docs/repo-summary.md` — this file.
+
+**Tests** (`tests/`, Playwright; one line per suite)
+- `tests/helpers.js` — shared `test` fixture (tour/tips pre-dismissed), `startNewGame`, `bringCommsOnline`, `atPort`.
+- `tests/atmosphere.spec.js` — CO2 vent equilibrium at large ticks.
+- `tests/checkpoints.spec.js` — `db.js` checkpoint tree (thinning, restore, branches) and the Timeline UI.
+- `tests/comms.spec.js` — sector generation, plane views, range-gated visibility.
+- `tests/dashboard.spec.js` — grouped fixed-height cards, collapse/expand, layout stability.
+- `tests/db.spec.js` — `db.js` unit tests run directly against SQLite (round-trips, ordering, migrations).
+- `tests/fabrication.spec.js` — supplies, parts boxes, compost lifecycle, fabrication jobs, persistence.
+- `tests/food-and-machine-boxes.spec.js` — meals and rationing, machine boxes, swap, resale and flooding.
+- `tests/logistics.spec.js` — yard start, drones, two-way run planning, room aboard, restock, strip, dock, thrusters, flight, persistence.
+- `tests/notifications.spec.js` — what gets listed, grouping, pill UI, persistence, related tips.
+- `tests/persistence.spec.js` — autosave timer and message.
+- `tests/repair.spec.js` — repair state, queue ordering, staged repairs, crew gating.
+- `tests/rng.spec.js` — seeded determinism and saved RNG state.
+- `tests/saves.spec.js` — named slots: create, list, load, delete.
+- `tests/sound.spec.js` — sound triggers via `sound.log`, channels, Sounds panel.
+- `tests/systems.spec.js` — power budget, market/water maker, water and black water (residue, spills, rationing), fatigue, idle crew.
+- `tests/tour.spec.js` — header location, guided tour, tips holding the clock.
+- `tests/_manual_capacity_modal_check.spec.js` — ship capacity modal opens and closes without console errors.
 
 ---
 
 ### 4. Data Model / Schema
-- **Ship class** (static) — `id`, `specs`, `defaultSystems` — `data/ship_classes.json`
-- **Ship instance** (live) — `id`, `classId`, `condition`, `systemState` (`atmosphere`, `o2Generator`, `co2Scrubber`, `battery`, `generator`, `fuel`), `repairQueue[]` — `data/ship_instances.json`
-- **Module spec** (static) — keyed by type+tier: `powerDrawW`/`outputLhr`/`outputW`, `degradationPctPerHr`, `repair.{minor,major,replacement}` (`hours`, `restorePct`, `destroyChance`) — `data/module_specs.json`
-- **Crew member** (static) — `id`, `name`, `classes[]`, `shifts[{startHour,endHour}]` — `data/crew_manifest.json`
-- **Repair task** (runtime, embedded per ship) — `id`, `systemKey`, `band`, `totalHours`, `hoursRemaining`, `status`
-- **Save snapshot** (world state) — `version`, `world{gameTime,credits,gameSpeed}`, `crew{count}`, `shipInstanceId`, `environment` — `savegame/save.json`
-
-Relationships are plain in-memory id lookups across separate flat files, not joins: ship instance → `classId` → ship class; `systemState.*.tier` → `module_specs[type][tier]`; `repairQueue[].systemKey` → `systemState[systemKey]`. No relational database exists.
+- **Static reference** (read-only JSON fetched at startup, not checkpointed): module specs, ship classes, crew template, story text.
+- **Live state** (`StarshipGame` instance properties):
+  - `systems` (o2, co2, power, fuel, freshWater, blackWater, food, transceiver, waterMaker, thrusters, ionDrive);
+  - `repairQueue`, `crewManifest`, `cargo.boxes`;
+  - `market`, `moduleResale`, `commsLocations`;
+  - `berth`, `flight`, `drones`, `droneDocks`, `portHold`;
+  - `notifications.list`, `rng` state, `gameTime`, `credits`.
+- **Save payload**: `{ world, shipInstances }` (`GameState.snapshot` and `shipInstanceSnapshot`), written in one PUT and one DB transaction.
+- **SQLite tables** (`db.js`):
+  - `saves` (`head_checkpoint_id`);
+  - ship-scoped, keyed `(save_id, ship_id, …)`: `ships`, `ship_atmosphere`, `ship_modules`, `ship_battery`, `ship_fuel`, `ship_water` (incl. residue/spill columns), `ship_food`, `repair_tasks` (`kind`, `recipe_key`), `storage_boxes` (`contents` JSON), `ship_cargo_items` (legacy loose items), `ship_logistics`, `drones` (`plan`, `plan_out`, cargo as JSON), `port_hold` (`entry` JSON);
+  - save-scoped, keyed `(save_id, id)`: `crew_members`, `comms_locations`, `market_listings`, `notifications`, `market_resale`;
+  - `save_checkpoints` (`parent_id` tree, full JSON `payload`, `kind` ∈ `start|hourly|save|branch-end`);
+  - `meta` (`schema_version`).
+- **Relationships**:
+  - a save has one ship (`'player-ship-1'`), whose modules, tasks, boxes, drones and hold all hang off `(save_id, ship_id)`;
+  - checkpoints form a tree per save, with `saves.head_checkpoint_id` pointing at the current one;
+  - repair tasks reference units by key: a system key, `box:<boxId>` or `drone:<droneId>`.
 
 ---
 
 ### 5. API / Interface Surface
-- `GET /api/ship-instances` — returns `ship_instances.json` (404 if missing)
-- `POST /api/ship-instances` — overwrites `ship_instances.json` (validates JSON; 400 if invalid)
-- `GET /api/save` — returns `save.json` (404 if missing)
-- `POST /api/save` — overwrites `save.json`
-- `HEAD /api/save` — 200/404 existence check
-- All other paths — static file passthrough from repo root, with a path-traversal guard
-- No other server endpoints exist.
-- Client-side test/debug surface: `window.game` — the live `StarshipGame` instance, exposed solely so `tests/repair.spec.js` can read/drive internal state.
+- `GET /api/saves`: list saves (`db.listSaves`).
+- `POST /api/saves` with `{ name }`: create a save. Returns 201; 400 if the name is missing, 409 if it's a duplicate.
+- `GET /api/saves/:id`: returns `{ world, shipInstances }`, or 404.
+- `PUT /api/saves/:id` with `{ world, shipInstances }`: `db.saveSave` in one transaction. Returns 400 or 500 on error.
+- `DELETE /api/saves/:id`: delete the save and all its rows.
+- `GET /api/saves/:id/checkpoints`: list the checkpoint tree.
+- `POST /api/saves/:id/checkpoints` with `{ kind, world, shipInstances }`: `db.addCheckpoint`. `kind` must be one of `CHECKPOINT_KINDS`.
+- `POST /api/saves/:id/checkpoints/:checkpointId/restore` with `{ current }`: `db.restoreCheckpoint` stores the live state as `branch-end` and returns the checkpoint's payload.
+- `OPTIONS` (any path): 204. Any other path is a static file, with `/` serving `index.html`.
+- `db.js` exports: `initDb`, `listSaves`, `createSave`, `deleteSave`, `getSave`, `saveSave`, `addCheckpoint`, `listCheckpoints`, `restoreCheckpoint`, `CHECKPOINT_KINDS`.
+- Test seam: `window.game` (`StarshipGame`) and `window.sound` (`SoundManager`).
 
 ---
 
 ### 6. Control Flow
-- **Boot**: `DOMContentLoaded` → `new StarshipGame()` → fetches `data/ship_classes.json`, `ship_instances.json`, `story_messages.json`, `module_specs.json`, `crew_manifest.json` → shows launch screen.
-- **New game**: launch screen → intro modal (text from `story_messages.json`) → `startNewGame()` seeds `this.systems`/`this.repairQueue` from the ship instance → `setInterval` tick loop starts.
-- **Tick** (every 1 real second, scaled by `gameSpeed` ∈ {1,10,100,1000}×): `gameTime` advances → `SystemUpdate.update(dt)` runs O2 → CO2 → power/fuel → repair decay → repair-queue processing → status thresholds → `updateDisplay()` re-renders the whole dashboard imperatively (no virtual DOM/diffing).
-- **Repair flow**: click a card's Repair button → `RepairManager.startRepair()` queues a task sized by the module's current repair band → each tick, on-shift engineering crew (matched against the ship clock via `crew_manifest.json`) work the front of the queue → on completion, `repairPct` is restored, or — on the risky "replacement" band — either jury-rigged (50% cap, 10× decay) or destroyed (1-in-5).
-- **Save/Load**: `saveGame()`/`loadGame()` round-trip world + ship-instance state through the two `server.js` JSON endpoints (or a portable single-file export/import that never touches the server).
+- **Startup**: `main.js` fetches the four reference JSON files and shows the launch screen.
+- **New Game**: name prompt → seed screen (`CommsNav.rollSeed`) → `startNewGame()`:
+  - pure defaults, `commsNav.generate(seed)`, starter boxes, `logistics.reset()`;
+  - `start` checkpoint, intro, then the tour auto-starts for first-time players.
+- **Load**: `#load-screen` → `GameState.loadServer` → `restore` (legacy defaults, residue re-split) → `timeline.onGameLoaded()`.
+- **Tick** (`_startTimer`, every real second, unless paused or a tour card holds time):
+  - `gameTime += gameSpeed`;
+  - `systemUpdate.update(gameSpeed)`, in order: power budget → O2 → CO2 → transceiver → food (meals from `gameTime`) → water/black water/water maker → power and fuel (dock charging) → crew health → repair decay → work queue → fabrication → logistics (flight, drone legs, deliveries) → market restock → statuses → game-over check;
+  - then `updateDisplay()` (full re-render, then `notifications.check()`), `tour.checkTips()` and `timeline.maybeCheckpoint()`.
+- **Player actions**: delegated click handlers (`data-fab-action`, `data-logi-action`, button ids) call domain methods, which enforce their own `*Blocker()` rules, then redraw.
+- **Trade**: `Logistics.tradeMode()` decides `direct` (berthed at the port) or `drone` (at the yard):
+  - in drone mode, a purchase becomes a `portHold` order;
+  - a drone's `plan` (inbound) and `planOut` (outbound) are loaded at `launch`/`_reachPort`;
+  - sales are paid on arrival at the port, and goods are delivered aboard on return.
+- **Save**: manual save, or autosave every real 5 minutes → `GameState.saveServer` → `PUT /api/saves/:id` (plus a `save` checkpoint for a manual save).
+- **Rewind**: Timeline → `POST …/restore` → `restore` → `game.afterRewind()` (paused on the pause menu).
+- **Observers**: `notifications.check()` after each redraw; `SoundManager._poll()` every 400 ms, diffing snapshots.
 
 ---
 
 ### 7. Dependencies
-- External (runtime, shipped to the browser): none — zero npm packages; no framework, no bundler.
-- Dev-only: `@playwright/test` (e2e browser testing; not shipped).
-- Frameworks: none.
-- Internal: `main.js` → `game_state.js`, `system_update.js`, `repair_manager.js` (all plain globals, wired by `<script>` load order in `index.html`); `system_update.js` → `repair_manager.js` (reads `game.repairManager.efficiency()`); all three of `game_state.js`/`system_update.js`/`repair_manager.js` read and write `main.js`'s `StarshipGame` instance properties directly (`this.systems`, `this.repairQueue`, `this.moduleSpecs`, `this.crewManifest`) — no encapsulation boundary between them.
+- External: `@playwright/test` (dev only). Runtime uses only Node built-ins (`http`, `fs`, `path`, `node:sqlite`) and browser APIs (Web Audio, `localStorage`, `fetch`, SVG).
+- Frameworks: none (no bundler, no client framework).
+- Internal:
+  - load order `rng` → `game_state` → `system_update` → `repair_manager` → `fabrication` → `logistics` → `crew_manager` → `comms_nav` → `tour` → `timeline` → `notifications` → `anchor` → `main` → `sound`;
+  - `StarshipGame` constructs every domain class;
+  - domain classes read and write each other through `this.game`. Examples: `Fabrication` calls `logistics.tradeMode`, `CommsNav` calls `logistics.orderBlocker`, `RepairManager` calls `fabrication`/`logistics` for unit keys, `SystemUpdate` calls them all.
 
 ---
 
 ### 8. Important Notes
-- **No module boundary**: all four client classes mutate the same `StarshipGame` instance's properties directly; nothing is private or passed by interface.
-- **Load-order coupling**: `main.js`, `system_update.js`, `repair_manager.js`, `game_state.js` are plain global-scope scripts — their `<script>` order in `index.html` is load-bearing and untested.
-- **Non-atomic persistence**: `/api/save` and `/api/ship-instances` are two independent POSTs (see `GameState.saveServer`); a failure between them can leave world state and ship state out of sync.
-- **Single-ship/single-player assumption hardcoded**: `shipInstanceId` defaults to `'player-ship-1'` throughout; the crew manifest currently holds exactly one member.
-- **Deliberate test seam in production code**: `window.game` is exposed permanently in `main.js` purely so `tests/repair.spec.js` can drive internal state — an intentional but unusual test/production coupling.
-- **Floating-point display risk**: numeric UI fields are explicitly rounded at render time; this has already caused one real bug (unrounded power-draw wattage leaking 16-digit floats once repair efficiency introduced non-terminating fractions) — any new calculated field needs the same explicit rounding.
+- **No encapsulation**: all live state is plain properties on `StarshipGame`, mutated directly by several classes. Grep for every reader before changing a field's shape.
+- **Rewind invariants** (`docs/rewind-readiness.md`):
+  - all state goes through `GameState` snapshot/restore;
+  - `restore` must accept older payloads;
+  - gameplay rolls use `game.rng.next()`, never `Math.random()`;
+  - time-based events (meals, restock) are derived from `gameTime` rather than stored counters.
+- **Large `dt`**: ticks can be up to 1000 game-seconds. Per-tick maths must clamp to equilibrium, loop through discrete events (meals, drone legs), or use an energy-over-tick budget (power).
+- **Migrations are append-only**: a server applies them once, at startup. A long-running server (including one reused by Playwright through `reuseExistingServer`) keeps its old schema and can mask migration bugs.
+- **Load order is load-bearing**: classes reference earlier globals by bare name. `sound.js` is deliberately loaded last and nothing calls into it.
+- **Unit keys**: a work-queue task may lack a `systemKey` (fabricate/strip jobs) or use a `box:` or `drone:` key. Code iterating `repairQueue` must allow for all of these.
+- **Observer pairing**: a new sound trigger should get a matching notification and vice versa, since both diff similar state.
+- **Legacy**: `data/ship_instances.json` is never read. `ship_cargo_items` (loose cargo items from before boxes) is still written and read, but `GameState._applyCargo` packs such items into boxes. `world_save` is created by the first migration and dropped by a later one.
+- **Security**: the server is plain HTTP, has no rate limiting, and echoes the exception message in the save-failure JSON response. It's intended for local use.
