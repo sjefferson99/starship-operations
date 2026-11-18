@@ -314,6 +314,15 @@ class SoundManager {
             // Compost finished: two soft, high notes.
             ready:    () => { this._tone(1047, { dur: 0.3, gain: 0.03, type: 'triangle' }); this._tone(1319, { at: 0.16, dur: 0.45, gain: 0.03, type: 'triangle' }); },
             tip:      () => this._tone(988, { dur: 0.25, gain: 0.03, attack: 0.02, slideTo: 1175 }),
+            // A drone setting down: a soft whirr winding down, then two notes.
+            droneHome: () => {
+                this._hiss({ dur: 0.5, gain: 0.03, from: 1600, to: 500, q: 3, attack: 0.05 });
+                this._tone(740, { at: 0.3, dur: 0.2, gain: 0.035, type: 'triangle' });
+                this._tone(988, { at: 0.42, dur: 0.35, gain: 0.035, type: 'triangle' });
+            },
+            // Thrusters: a long rising roar for lift-off, a falling one and a chime for touchdown.
+            liftOff: () => { this._hiss({ dur: 1.6, gain: 0.07, from: 150, to: 1400, q: 0.7, attack: 0.3 }); this._tone(82, { dur: 1.4, gain: 0.06, slideTo: 130, type: 'triangle', attack: 0.3 }); },
+            landing: () => { this._hiss({ dur: 1.2, gain: 0.06, from: 1200, to: 120, q: 0.7, attack: 0.05 }); this._tone(660, { at: 1.0, dur: 0.25, gain: 0.04 }); this._tone(880, { at: 1.15, dur: 0.5, gain: 0.04 }); },
             gameOver: () => [392, 330, 262, 196].forEach((f, i) => this._tone(f, { at: i * 0.45, dur: 1.1, gain: 0.06, attack: 0.05 })),
         };
     }
@@ -433,6 +442,10 @@ class SoundManager {
         (g.cargo?.boxes ?? []).forEach(b => {
             if (b.module) modules[`box:${b.id}`] = { pct: b.module.repairPct ?? 100, destroyed: !!b.module.destroyed };
         });
+        // So are drones.
+        g.logistics.drones().forEach(d => {
+            modules[`drone:${d.id}`] = { pct: d.repairPct ?? 100, destroyed: !!d.destroyed };
+        });
         return {
             saveId: g.saveId,
             // Per-system ranks, so one thing getting worse is heard even while another is already bad.
@@ -442,7 +455,12 @@ class SoundManager {
             ventsOpen: g.ventsOpen,
             blackWater: s.blackWater.current,
             stock: (g.market || []).length,
-            supplies: Object.values(g.cargo?.items ?? {}).reduce((a, n) => a + n, 0),
+            supplies: Object.keys(g.fabrication.ITEMS).reduce((a, k) => a + g.fabrication.count(k), 0),
+            // Bought from the yard: waiting at the port, or a new drone.
+            held: g.logistics.holdMassKg(),
+            drones: g.logistics.drones().length,
+            dronesHome: g.logistics.drones().filter(d => g.logistics.isHome(d)).length,
+            flying: g.logistics.isFlying(),
             food: g.fabrication.rationsAboard(),
             stored: (g.cargo?.boxes ?? []).filter(b => b.module).length,
             swaps: g.fabrication.swapCount,
@@ -501,6 +519,10 @@ class SoundManager {
         if (now.stock < prev.stock && now.credits < prev.credits) this.play('purchase');
         if (now.supplies > prev.supplies && now.credits < prev.credits) this.play('purchase');
         if (now.food - prev.food > 0.5 && now.credits < prev.credits) this.play('purchase');
+        if ((now.held > prev.held || now.drones > prev.drones) && now.credits < prev.credits) this.play('purchase');
+        if (now.drones === prev.drones && now.dronesHome > prev.dronesHome) this.play('droneHome');
+        if (now.flying && !prev.flying) this.play('liftOff');
+        if (!now.flying && prev.flying) this.play('landing');
         if (now.stored < prev.stored && now.credits > prev.credits && !swapped) this.play('sale');
         if (swapped) this.play('repaired');
         if (now.boxes > prev.boxes) this.play('repaired'); // a fabrication job finished

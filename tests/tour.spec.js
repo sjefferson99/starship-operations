@@ -10,8 +10,19 @@ const showTour = page => page.addInitScript(() => localStorage.removeItem('stars
 test.describe('header location', () => {
     test('shows the current location name and type', async ({ page }) => {
         await startNewGame(page);
-        await expect(page.locator('#location-name')).toHaveText('Kel Veth III');
-        await expect(page.locator('#location-type')).toHaveText('Planet · Breathable atmosphere');
+        await expect(page.locator('#location-name')).toHaveText('Harlow\'s Salvage');
+        await expect(page.locator('#location-type')).toHaveText('Kel Veth III · Planet · Salvage yard · Breathable atmosphere');
+    });
+
+    test('follows the ship to the port, and in flight', async ({ page }) => {
+        await startNewGame(page);
+        await page.evaluate(() => { const g = window.game; g.flight = { to: 'port', hoursLeft: 0.2, totalHours: 0.3 }; g.updateDisplay(); });
+        await expect(page.locator('#location-name')).toHaveText('In flight to Port Carrow');
+        await expect(page.locator('body')).toHaveAttribute('data-bg', 'flight');
+        await page.evaluate(() => { const g = window.game; g.flight = null; g.berth = 'port'; g.updateDisplay(); });
+        await expect(page.locator('#location-name')).toHaveText('Port Carrow');
+        await expect(page.locator('#location-type')).toHaveText('Kel Veth III · Planet · Spaceport · Breathable atmosphere');
+        await expect(page.locator('body')).toHaveAttribute('data-bg', 'port');
     });
 });
 
@@ -31,6 +42,9 @@ test.describe('guided tour', () => {
         await expect(title).toHaveText('Welcome aboard, Captain');
         await page.click('#tour-next-btn');
         await expect(title).toHaveText('Where you are');
+        await page.click('#tour-next-btn');
+        await expect(title).toHaveText('Her drives are scrap');
+        await expect(page.locator('#tour-body')).toContainText('Storage Box 2 is empty');
         await page.click('#tour-next-btn');
 
         // Action steps have no Next button — they advance on the real control.

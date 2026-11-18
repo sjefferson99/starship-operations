@@ -3,7 +3,7 @@
 // module each: repaired in the work queue, swapped with the fitted one, or
 // sold) — fabrication.js, with the eating in system_update.js.
 const { expect } = require('@playwright/test');
-const { test, startNewGame, bringCommsOnline } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline, atPort } = require('./helpers.js');
 
 const freeze = page => page.evaluate(() => window.game._stopTimer());
 
@@ -15,21 +15,22 @@ async function engineerAlwaysOnShift(page) {
 }
 
 test.describe('food', () => {
-    test('a new ship has five days of rations in a storage box, shown on the Food Stores card', async ({ page }) => {
+    test('a new ship has five days of rations in a storage box (and an empty one), shown on the Food Stores card', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
         const r = await page.evaluate(() => {
             const fab = window.game.fabrication;
             return { boxes: fab.boxes().map(b => ({ kind: b.kind, size: b.size, fillL: b.fillL })), rations: fab.rationsAboard() };
         });
-        expect(r.boxes).toEqual([{ kind: 'food', size: 'standard', fillL: 15 }]);
+        // The second box is kept empty for the parts stripped off the wrecked drives.
+        expect(r.boxes).toEqual([{ kind: 'food', size: 'standard', fillL: 15 }, { kind: null, size: 'standard', fillL: 0 }]);
         expect(r.rations).toBe(15);
         await expect(page.locator('#food-rations')).toHaveText('15');
         await expect(page.locator('#food-boxes')).toHaveText('1 box');
         await expect(page.locator('#food-rate')).toHaveText('−3 rations/day');
         await expect(page.locator('#food-next-meal')).toHaveText('in 7h (1 ration)');
         await expect(page.locator('#food-runtime')).toHaveText('5.0 days');
-        await expect(page.locator('#food-room')).toHaveText('35 rations');
+        await expect(page.locator('#food-room')).toHaveText('85 rations'); // 35 in the food box, 50 in the empty one
     });
 
     test('the crew eat three rations a day each, and what they eat becomes solid waste', async ({ page }) => {
@@ -145,12 +146,14 @@ test.describe('food', () => {
     test('rations are bought by the case into food boxes, then empty boxes, and refused with no room', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
-        expect(await page.evaluate(() => window.game.fabrication.buyFoodBlocker())).toMatch(/planet/);
+        expect(await page.evaluate(() => window.game.fabrication.buyFoodBlocker())).toMatch(/out of range/);
 
         await bringCommsOnline(page);
+        await atPort(page);
         await page.evaluate(() => {
             const g = window.game;
             g.credits = 1000;
+            g.cargo.boxes = [g.cargo.boxes[0]]; // just the food box
             g.cargo.boxes[0].fillL = 45;
             g.cargo.boxes.push({ id: 'box-compost', size: 'standard', kind: 'compost', fillL: 3, sealed: false, compostHours: 0, module: null });
             g.cargo.boxes.push({ id: 'box-empty',   size: 'standard', kind: null, fillL: 0, sealed: false, compostHours: 0, module: null });
@@ -180,6 +183,7 @@ test.describe('food', () => {
         await freeze(page);
         const r = await page.evaluate(async () => {
             const g = window.game;
+            g.cargo.boxes = [g.cargo.boxes[0]]; // just the food box
             g.cargo.boxes[0].fillL = 7.25;
             g.systems.food.starvedHours = 5;
             g.systems.food.rationing = true;
@@ -210,9 +214,9 @@ test.describe('machine storage boxes', () => {
         const r = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
             g.repairQueue = [];
-            g.cargo.items.basicComponents = 1;
+            fab.storeParts('basicComponents', 1);
             const tooFew = fab.fabricateBlocker('machineBox');
-            g.cargo.items.basicComponents = 2;
+            fab.storeParts('basicComponents', 1);
             const task = fab.queueFabrication('machineBox');
             g.repairManager.processQueue(3600 * 9);
             const after9 = fab.machineBoxes().length;
@@ -233,6 +237,7 @@ test.describe('machine storage boxes', () => {
     test('buy & store a module, repair it in the queue, then sell it for a profit', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page);
         await engineerAlwaysOnShift(page);
         await page.evaluate(() => {
             const g = window.game;
@@ -278,13 +283,13 @@ test.describe('machine storage boxes', () => {
         expect(repaired.module.repairPct).toBe(100);
         expect(repaired.fitted).toBeGreaterThan(99); // the fitted one is untouched (bar a moment's wear)
         expect(repaired.queue).toBe(0);
-        expect(repaired.value).toBe(400);
+        expect(repaired.value).toBe(750);
 
         await page.click('[data-fab-action="sellModule"][data-box-id="mbox"]');
         const sold = await page.evaluate(() => ({ credits: window.game.credits, module: window.game.fabrication.storedModule('mbox') }));
         expect(sold.module).toBe(null);
-        expect(sold.credits - (1000 - paid)).toBe(400);
-        expect(400).toBeGreaterThan(paid);
+        expect(sold.credits - (1000 - paid)).toBe(750);
+        expect(750).toBeGreaterThan(paid);
 
         const titles = await page.evaluate(() => window.game.notifications.list.map(n => n.title));
         expect(titles.some(t => /^Bought Salvaged Transceiver/.test(t))).toBe(true);
@@ -324,6 +329,7 @@ test.describe('machine storage boxes', () => {
     test('selling floods the market: the next of that type fetches less, recovering over time, and this is saved', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page);
         await freeze(page);
         const r = await page.evaluate(async () => {
             const g = window.game, fab = g.fabrication;
@@ -342,18 +348,19 @@ test.describe('machine storage boxes', () => {
             fab.update(fab.MODULE_RESALE_RECOVERY_DAYS * 86400 * 5);
             return { first, second, otherType, afterLoad, halfway, recovered: fab.moduleSaleValue(fab.storedModule('m3')), left: g.moduleResale };
         });
-        expect(r.first).toBe(400);
-        expect(r.second).toBe(320);   // −20% after one recent sale
-        expect(r.otherType).toBe(400); // other module types unaffected
-        expect(r.afterLoad).toBe(256); // two recent sales, kept across save and load
-        expect(r.halfway).toBe(320);
-        expect(r.recovered).toBe(400);
+        expect(r.first).toBe(750);
+        expect(r.second).toBe(675);   // −10% after one recent sale
+        expect(r.otherType).toBe(750); // other module types unaffected
+        expect(r.afterLoad).toBe(608); // two recent sales, kept across save and load
+        expect(r.halfway).toBe(675);
+        expect(r.recovered).toBe(750);
         expect(r.left).toEqual({});
     });
 
-    test('a wrecked stored module cannot be fitted; buying to store needs an empty machine box', async ({ page }) => {
+    test('a wrecked stored module cannot be fitted; buying to store at the port needs an empty machine box', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page); // from the yard it's only an order, which can wait for a box
         const r = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
             g.credits = 1000;
@@ -378,7 +385,7 @@ test.describe('machine storage boxes', () => {
         const r = await page.evaluate(async () => {
             const g = window.game;
             g.cargo.boxes.push({ id: 'mbox', size: 'machine', kind: null, fillL: 0, sealed: false, compostHours: 0,
-                                 module: { moduleKey: 'waterMaker', tier: 1, repairPct: 37, juryRigged: true, destroyed: false } });
+                                 module: { moduleKey: 'waterMaker', tier: 1, repairPct: 37, juryRigged: true, destroyed: false }, parts: null });
             g.repairManager.startRepair('box:mbox', 50);
             const before = JSON.parse(JSON.stringify(g.cargo.boxes));
             await g.saveGame();

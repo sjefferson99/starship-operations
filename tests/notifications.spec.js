@@ -52,6 +52,7 @@ test.describe('notifications', () => {
             const g = window.game;
             g.systems.transceiver.repairPct = 100; g.systems.transceiver.active = true;
             g.systemUpdate.update(1);
+            g.berth = 'port'; // trade is direct at the port
             g.notifications._prev = g.notifications._state(); // re-baseline: the setup isn't the event under test
             g.commsNav.purchase(g.market.find(l => l.moduleKey === 'waterMaker').id);
         });
@@ -84,6 +85,27 @@ test.describe('notifications', () => {
         expect(listed).toContain('Compost ready in Storage Box 1');
         // A destroyed module isn't listed twice (once as destroyed, once as a critical status).
         expect(listed.filter(t => t.startsWith('CO₂'))).toEqual(['CO₂ Scrubber destroyed']);
+    });
+
+    test('a drone repair is listed and chimes, but wear from flying is not', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+        await page.evaluate(() => {
+            const g = window.game;
+            g.drones = [{ id: 'd1', tier: 1, repairPct: 40, juryRigged: false, destroyed: false, chargeWh: 1500,
+                          chargeFromBattery: false, plan: [], planOut: [], state: 'stowed', hoursLeft: 0, cargoOut: [], cargoIn: [] }];
+            g.notifications._prev = g.notifications._state();
+            window.sound._prev = window.sound._snapshot();
+            window.sound.log = [];
+        });
+        await page.evaluate(() => { window.game.drones[0].repairPct = 38; }); // a run's wear
+        await check(page);
+        expect(await titles(page)).toEqual([]);
+
+        await page.evaluate(() => { window.game.drones[0].repairPct = 80; window.sound._lastChimeAt = 0; window.sound._poll(); });
+        await check(page);
+        expect(await titles(page)).toEqual(['Transfer Drone 1 repaired to 80%']);
+        expect(await page.evaluate(() => window.sound.log)).toContain('repaired');
     });
 
     test('an infection is listed and chimes as critical; compost being ready has its own chime', async ({ page }) => {
@@ -249,11 +271,12 @@ test.describe('tips for the Timeline and ship capacity', () => {
     });
 
     test('the capacity tip appears when the hold is nearly full, pointing at Ship Capacity', async ({ page }) => {
-        // Fill the hold with supplies until under 15% of the volume is left.
+        // Fill the hold with empty machine boxes until under 15% of the volume is left.
         const result = await onlyTip(page, 'space-low', `
             const cap = g._computeShipCapacity();
-            const vol = g.fabrication.ITEMS.compostingAgent.volumeM3;
-            g.cargo.items.compostingAgent = Math.ceil((cap.freeVolumeM3 - cap.totalVolumeM3 * 0.1) / vol);
+            const vol = g.fabrication.MACHINE_BOX.volumeM3;
+            const n = Math.ceil((cap.freeVolumeM3 - cap.totalVolumeM3 * 0.1) / vol);
+            for (let i = 0; i < n; i++) g.fabrication.boxes().push(g.fabrication._emptyBox('machine'));
         `);
         expect(result).toEqual({ dueBefore: false, shown: 'space-low' });
         expect(await page.evaluate(() => window.game.tour.tip.target)).toBe('#ship-capacity-btn');

@@ -10,8 +10,8 @@ const { DatabaseSync } = require('node:sqlite');
 const fs   = require('fs');
 const path = require('path');
 
-const SYSTEM_KEYS = ['o2Generator', 'co2Scrubber', 'generator', 'transceiver', 'waterMaker'];
-const OPTIONAL_SYSTEM_KEYS = ['transceiver', 'waterMaker']; // added after the first saves were written
+const SYSTEM_KEYS = ['o2Generator', 'co2Scrubber', 'generator', 'transceiver', 'waterMaker', 'thrusters', 'ionDrive'];
+const OPTIONAL_SYSTEM_KEYS = ['transceiver', 'waterMaker', 'thrusters', 'ionDrive']; // added after the first saves were written
 
 // Each entry runs once, in order, against a fresh-or-upgrading DB. Append new
 // entries here as the schema grows — never edit an already-shipped entry.
@@ -407,6 +407,71 @@ const MIGRATIONS = [
             ALTER TABLE ship_food ADD COLUMN ration_hours REAL;
         `);
     },
+    // Logistics (logistics.js): where the ship is berthed (Harlow's yard or
+    // Port Carrow) and any flight under way, drone docks, the transfer drones
+    // (their loads are JSON lists, like crew shifts), and orders waiting at the
+    // port. Supplies now live in storage boxes: a parts box's contents are a
+    // JSON map of item -> count. The drives are ship_modules rows.
+    db => {
+        db.exec(`
+            ALTER TABLE storage_boxes ADD COLUMN contents TEXT;
+
+            CREATE TABLE IF NOT EXISTS ship_logistics (
+                save_id INTEGER,
+                ship_id TEXT,
+                berth TEXT,
+                flight_to TEXT,
+                flight_hours_left REAL,
+                flight_total_hours REAL,
+                drone_docks INTEGER,
+                PRIMARY KEY (save_id, ship_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS drones (
+                save_id INTEGER,
+                ship_id TEXT,
+                id TEXT,
+                position INTEGER,
+                tier INTEGER,
+                state TEXT,
+                hours_left REAL,
+                charge_wh REAL,
+                repair_pct REAL,
+                jury_rigged INTEGER,
+                cargo_out TEXT,
+                cargo_in TEXT,
+                PRIMARY KEY (save_id, ship_id, id)
+            );
+
+            CREATE TABLE IF NOT EXISTS port_hold (
+                save_id INTEGER,
+                ship_id TEXT,
+                id TEXT,
+                position INTEGER,
+                entry TEXT,
+                PRIMARY KEY (save_id, ship_id, id)
+            );
+        `);
+    },
+    // A drone's "charge from battery" switch (logistics.js).
+    db => {
+        db.exec('ALTER TABLE drones ADD COLUMN charge_from_battery INTEGER;');
+    },
+    // A drone's planned run: what it brings back from the port hold, as JSON.
+    db => {
+        db.exec('ALTER TABLE drones ADD COLUMN plan TEXT;');
+    },
+    // Black water spilled in the cabin, waiting to be cleaned up.
+    db => {
+        db.exec(`
+            ALTER TABLE ship_water ADD COLUMN black_spill_liquid_l REAL;
+            ALTER TABLE ship_water ADD COLUMN black_spill_solid_l REAL;
+        `);
+    },
+    // A drone's planned run out: what it takes to the port to sell, as JSON.
+    db => {
+        db.exec('ALTER TABLE drones ADD COLUMN plan_out TEXT;');
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -477,7 +542,7 @@ function createSave(db, name) {
 function deleteSave(db, saveId) {
     db.exec('BEGIN');
     try {
-        ['notifications', 'market_resale', 'ship_food', 'storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
+        ['port_hold', 'drones', 'ship_logistics', 'notifications', 'market_resale', 'ship_food', 'storage_boxes', 'ship_cargo_items', 'save_checkpoints', 'market_listings', 'comms_locations', 'crew_members', 'repair_tasks', 'ship_water', 'ship_fuel', 'ship_battery', 'ship_modules', 'ship_atmosphere', 'ships'].forEach(table => {
             db.prepare(`DELETE FROM ${table} WHERE save_id = ?`).run(saveId);
         });
         db.prepare('DELETE FROM saves WHERE id = ?').run(saveId);
@@ -557,6 +622,10 @@ function _composeShip(db, saveId, shipRow) {
     const items   = db.prepare('SELECT * FROM ship_cargo_items WHERE save_id = ? AND ship_id = ?').all(saveId, shipRow.id);
     const boxes   = db.prepare('SELECT * FROM storage_boxes WHERE save_id = ? AND ship_id = ? ORDER BY position').all(saveId, shipRow.id);
     const food    = db.prepare('SELECT * FROM ship_food WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id);
+    const logi    = db.prepare('SELECT * FROM ship_logistics WHERE save_id = ? AND ship_id = ?').get(saveId, shipRow.id);
+    const drones  = db.prepare('SELECT * FROM drones WHERE save_id = ? AND ship_id = ? ORDER BY position').all(saveId, shipRow.id);
+    const hold    = db.prepare('SELECT * FROM port_hold WHERE save_id = ? AND ship_id = ? ORDER BY position').all(saveId, shipRow.id);
+    const json    = (text, fallback) => { try { return text ? JSON.parse(text) : fallback; } catch { return fallback; } };
 
     const moduleState = key => {
         const m = byKey[key] ?? {};
@@ -587,6 +656,8 @@ function _composeShip(db, saveId, shipRow) {
             generator: moduleState('generator'),
             transceiver: optionalModuleState('transceiver'),
             waterMaker: optionalModuleState('waterMaker'),
+            thrusters: optionalModuleState('thrusters'),
+            ionDrive: optionalModuleState('ionDrive'),
             fuel: { currentL: fuel.current_l, capacityL: fuel.capacity_l },
             water: {
                 freshCurrentL: water.fresh_current_l, freshCapacityL: water.fresh_capacity_l,
@@ -596,6 +667,8 @@ function _composeShip(db, saveId, shipRow) {
                 blackLiquidL: water.black_liquid_l, blackSolidL: water.black_solid_l, blackCapacityL: water.black_capacity_l,
                 blackExposureHours: water.black_exposure_hours,
                 blackResidueL: water.black_residue_l,
+                blackSpillLiquidL: water.black_spill_liquid_l,
+                blackSpillSolidL: water.black_spill_solid_l,
             },
             // `present` is false for a save written before food existed (no row).
             food: {
@@ -603,9 +676,9 @@ function _composeShip(db, saveId, shipRow) {
                 rationing: food?.rationing == null ? null : !!food.rationing, rationHours: food?.ration_hours ?? null,
             },
         },
-        repairQueue: tasks.map(t => t.kind === 'fabricate'
+        repairQueue: tasks.map(t => (t.kind === 'fabricate' || t.kind === 'strip')
             ? {
-                id: t.id, kind: 'fabricate', recipeKey: t.recipe_key, band: t.band,
+                id: t.id, kind: t.kind, recipeKey: t.recipe_key, band: t.band,
                 totalHours: t.total_hours, hoursRemaining: t.hours_remaining, status: t.status,
             }
             : {
@@ -618,12 +691,28 @@ function _composeShip(db, saveId, shipRow) {
             boxes: boxes.map(b => ({
                 id: b.id, size: b.size ?? 'standard', kind: b.kind ?? null, fillL: b.fill_l ?? 0,
                 sealed: !!b.sealed, compostHours: b.compost_hours ?? 0,
+                parts: b.kind === 'parts' ? json(b.contents, {}) : null,
                 module: b.module_key ? {
                     moduleKey: b.module_key, tier: b.module_tier ?? 1, repairPct: b.module_repair_pct ?? 100,
                     juryRigged: !!b.module_jury_rigged, destroyed: !!b.module_destroyed,
                 } : null,
             })),
         },
+        // Absent (null) for a save written before logistics: the client starts it at the yard.
+        logistics: logi ? {
+            berth: logi.berth ?? 'yard',
+            flight: logi.flight_to ? { to: logi.flight_to, hoursLeft: logi.flight_hours_left ?? 0, totalHours: logi.flight_total_hours ?? 0 } : null,
+            droneDocks: logi.drone_docks ?? 0,
+            drones: drones.map(d => ({
+                id: d.id, tier: d.tier ?? 1, state: d.state, hoursLeft: d.hours_left ?? 0, chargeWh: d.charge_wh ?? 0,
+                chargeFromBattery: !!d.charge_from_battery,
+                plan: json(d.plan, []),
+                planOut: json(d.plan_out, []),
+                repairPct: d.repair_pct ?? 100, juryRigged: !!d.jury_rigged,
+                cargoOut: json(d.cargo_out, []), cargoIn: json(d.cargo_in, []),
+            })),
+            portHold: hold.map(h => json(h.entry, null)).filter(Boolean),
+        } : null,
     };
 }
 
@@ -889,19 +978,21 @@ function _saveOneShip(db, saveId, ship) {
 
     const water = s.water ?? {};
     db.prepare(`
-        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l, black_exposure_hours, black_residue_l)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ship_water (save_id, ship_id, fresh_current_l, fresh_capacity_l, fresh_rationing, fresh_depleted_hours, fresh_ration_hours, black_liquid_l, black_solid_l, black_capacity_l, black_exposure_hours, black_residue_l, black_spill_liquid_l, black_spill_solid_l)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(save_id, ship_id) DO UPDATE SET
             fresh_current_l = excluded.fresh_current_l, fresh_capacity_l = excluded.fresh_capacity_l,
             fresh_rationing = excluded.fresh_rationing, fresh_depleted_hours = excluded.fresh_depleted_hours,
             fresh_ration_hours = excluded.fresh_ration_hours,
             black_liquid_l = excluded.black_liquid_l, black_solid_l = excluded.black_solid_l, black_capacity_l = excluded.black_capacity_l,
-            black_exposure_hours = excluded.black_exposure_hours, black_residue_l = excluded.black_residue_l
+            black_exposure_hours = excluded.black_exposure_hours, black_residue_l = excluded.black_residue_l,
+            black_spill_liquid_l = excluded.black_spill_liquid_l, black_spill_solid_l = excluded.black_spill_solid_l
     `).run(
         saveId, ship.id, water.freshCurrentL ?? null, water.freshCapacityL ?? null,
         water.rationing ? 1 : 0, water.freshDepletedHours ?? null, water.rationHours ?? null,
         water.blackLiquidL ?? null, water.blackSolidL ?? null, water.blackCapacityL ?? null,
-        water.blackExposureHours ?? null, water.blackResidueL ?? null
+        water.blackExposureHours ?? null, water.blackResidueL ?? null,
+        water.blackSpillLiquidL ?? null, water.blackSpillSolidL ?? null
     );
 
     db.prepare('DELETE FROM repair_tasks WHERE save_id = ? AND ship_id = ?').run(saveId, ship.id);
@@ -911,7 +1002,7 @@ function _saveOneShip(db, saveId, ship) {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             task.id, saveId, ship.id, task.systemKey ?? null, task.band ?? null, task.totalHours, task.hoursRemaining, task.status, idx,
-            task.kind === 'fabricate' ? null : (task.targetPct ?? 100),
+            (task.kind === 'fabricate' || task.kind === 'strip') ? null : (task.targetPct ?? 100),
             task.kind ?? 'repair', task.recipeKey ?? null
         );
     });
@@ -926,12 +1017,15 @@ function _saveOneShip(db, saveId, ship) {
         const m = box.module;
         db.prepare(`
             INSERT INTO storage_boxes (save_id, ship_id, id, position, kind, fill_l, sealed, compost_hours,
-                size, module_key, module_tier, module_repair_pct, module_jury_rigged, module_destroyed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                size, module_key, module_tier, module_repair_pct, module_jury_rigged, module_destroyed, contents)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(saveId, ship.id, box.id, idx, box.kind ?? null, box.fillL ?? 0, box.sealed ? 1 : 0, box.compostHours ?? 0,
             box.size ?? 'standard', m?.moduleKey ?? null, m ? (m.tier ?? 1) : null, m ? (m.repairPct ?? 100) : null,
-            m ? (m.juryRigged ? 1 : 0) : null, m ? (m.destroyed ? 1 : 0) : null);
+            m ? (m.juryRigged ? 1 : 0) : null, m ? (m.destroyed ? 1 : 0) : null,
+            box.parts ? JSON.stringify(box.parts) : null);
     });
+
+    _saveLogistics(db, saveId, ship.id, ship.logistics);
 
     // A payload from before food existed carries no food state: write no row,
     // so loading it still reads as "no food state" and gets starter rations.
@@ -941,6 +1035,29 @@ function _saveOneShip(db, saveId, ship) {
         db.prepare('INSERT INTO ship_food (save_id, ship_id, starved_hours, rationing, ration_hours) VALUES (?, ?, ?, ?, ?)')
             .run(saveId, ship.id, food.starvedHours, food.rationing ? 1 : 0, food.rationHours ?? 0);
     }
+}
+
+// Berth, drones and the port hold. A payload from before logistics carries
+// none: write no rows, so loading it still reads as "start at the yard".
+function _saveLogistics(db, saveId, shipId, logi) {
+    ['ship_logistics', 'drones', 'port_hold'].forEach(table =>
+        db.prepare(`DELETE FROM ${table} WHERE save_id = ? AND ship_id = ?`).run(saveId, shipId));
+    if (!logi) return;
+    db.prepare(`
+        INSERT INTO ship_logistics (save_id, ship_id, berth, flight_to, flight_hours_left, flight_total_hours, drone_docks)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(saveId, shipId, logi.berth ?? 'yard', logi.flight?.to ?? null, logi.flight?.hoursLeft ?? null,
+        logi.flight?.totalHours ?? null, logi.droneDocks ?? 0);
+    const insertDrone = db.prepare(`
+        INSERT INTO drones (save_id, ship_id, id, position, tier, state, hours_left, charge_wh, repair_pct, jury_rigged, cargo_out, cargo_in, charge_from_battery, plan, plan_out)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    (logi.drones ?? []).forEach((d, i) => insertDrone.run(saveId, shipId, String(d.id), i, d.tier ?? 1, d.state ?? 'stowed',
+        d.hoursLeft ?? 0, d.chargeWh ?? 0, d.repairPct ?? 100, d.juryRigged ? 1 : 0,
+        JSON.stringify(d.cargoOut ?? []), JSON.stringify(d.cargoIn ?? []), d.chargeFromBattery ? 1 : 0,
+        JSON.stringify(d.plan ?? []), JSON.stringify(d.planOut ?? [])));
+    const insertHold = db.prepare('INSERT INTO port_hold (save_id, ship_id, id, position, entry) VALUES (?, ?, ?, ?, ?)');
+    (logi.portHold ?? []).forEach((e, i) => insertHold.run(saveId, shipId, String(e.id ?? `hold-${i}`), i, JSON.stringify(e)));
 }
 
 module.exports = {

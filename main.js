@@ -111,6 +111,8 @@ class StarshipGame {
         this.commsNavScreen  = document.getElementById('comms-nav-screen');
         this.shipCapacityScreen = document.getElementById('ship-capacity-screen');
         this.cargoScreen        = document.getElementById('cargo-screen');
+        this.droneRunScreen     = document.getElementById('drone-run-screen');
+        this._planDroneId       = null; // the drone whose run the Plan Run screen is showing
         this.creditsElement = document.getElementById('credits');
         this.timerElement   = document.getElementById('timer');
         this.dayElement     = document.getElementById('day-counter');
@@ -121,6 +123,8 @@ class StarshipGame {
         this.commsNav        = new CommsNav(this);
         this.repairManager = new RepairManager(this);
         this.fabrication   = new Fabrication(this);
+        this.logistics     = new Logistics(this); // berth, drones, port hold, drives (logistics.js)
+        this.logistics.reset();
         this.systemUpdate   = new SystemUpdate(this);
         this.tour           = new Tour(this);
         this.timeline       = new Timeline(this);
@@ -132,9 +136,16 @@ class StarshipGame {
     }
 
     // ── Background theme ────────────────────────────────────────────────────
-    // Call with 'city' (planet surface) or 'space' (in transit / orbit)
+    // 'city' (the planet surface: Harlow's yard, and the menus), 'port' (berthed
+    // at Port Carrow), 'flight' (crossing between them) or 'space'.
     setBackground(theme) {
-        document.body.dataset.bg = theme;
+        if (document.body.dataset.bg !== theme) document.body.dataset.bg = theme;
+    }
+
+    // In a game, the background follows where the ship is.
+    _syncBackground() {
+        if (!this.gameActive) return;
+        this.setBackground(this.logistics.isFlying() ? 'flight' : this.logistics.atPort() ? 'port' : 'city');
     }
 
     _defaultSystems() {
@@ -176,6 +187,16 @@ class StarshipGame {
                 outputLhr: 0, drawW: 0, source: 'none',
                 repairPct: 100, juryRigged: false, destroyed: false, installed: false,
             },
+            // Drives (logistics.js): both wrecked when you buy her. Stripped for
+            // parts they come out (installed false); thrusters are then built new.
+            thrusters: {
+                status: 'Critical', active: false, count: 1, tier: 1,
+                repairPct: 0, juryRigged: false, destroyed: true, installed: true,
+            },
+            ionDrive: {
+                status: 'Critical', active: false, count: 1, tier: 1,
+                repairPct: 0, juryRigged: false, destroyed: true, installed: true,
+            },
             fuel: {
                 level: 10, status: 'Warning',
                 capacity: 100, current: 10,
@@ -193,9 +214,10 @@ class StarshipGame {
                 level: 0, status: 'Normal',
                 capacity: 100, current: 0,
                 liquidL: 0, solidL: 0,
-                residueL: 0, // liquid the water maker processed but couldn't reclaim; only a dump clears it
+                residueL: 0, // liquid soaked into the solids, which the water maker can't reclaim (SystemUpdate.settleResidue)
                 liquidRateLhr: 0, solidRateLhr: 0, fillRateLhr: 0,
-                exposureHours: 0, // how long the tank has been full and backing up into the cabin
+                exposureHours: 0, // how long waste has been spilled in the cabin
+                spillLiquidL: 0, spillSolidL: 0, // what the full tank couldn't take, on the cabin floor until cleaned up
             },
             // Food rations live in storage boxes (fabrication.js); this is what
             // the tick works out from them, plus how long the crew have gone hungry.
@@ -231,6 +253,7 @@ class StarshipGame {
         document.getElementById('ship-capacity-close-btn').addEventListener('click', () => this._closeShipCapacityScreen());
         document.getElementById('cargo-btn').addEventListener('click',               () => this._openCargoScreen());
         document.getElementById('cargo-close-btn').addEventListener('click',         () => this._closeCargoScreen());
+        document.getElementById('drone-run-close-btn').addEventListener('click',     () => this._closeDroneRunScreen());
         document.getElementById('blackwater-transfer-btn').addEventListener('click', () => {
             const box = this.fabrication.transferTarget();
             if (box) this.fabricationAction('transfer', { boxId: box.id });
@@ -248,6 +271,15 @@ class StarshipGame {
             const btn = e.target.closest('[data-fab-action]');
             if (!btn || btn.disabled) return;
             this.fabricationAction(btn.dataset.fabAction, { boxId: btn.dataset.boxId, key: btn.dataset.key });
+        });
+        // Propulsion & Logistics buttons (drive cards, drone card, market rows).
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('[data-logi-action]');
+            if (!btn || btn.disabled) return;
+            this.logisticsAction(btn.dataset.logiAction, {
+                key: btn.dataset.key, droneId: btn.dataset.droneId, to: btn.dataset.to,
+                holdId: btn.dataset.holdId, qty: btn.dataset.qty, boxId: btn.dataset.boxId,
+            });
         });
         // Market rows' "Buy & Store" buttons (into a machine box) — re-rendered like the rest.
         document.addEventListener('click', e => {
@@ -296,6 +328,7 @@ class StarshipGame {
         document.getElementById('water-ration-toggle').addEventListener('click', () => this.toggleWaterRationing());
         document.getElementById('food-ration-toggle').addEventListener('click',  () => this.toggleFoodRationing());
         document.getElementById('blackwater-dump-btn').addEventListener('click', () => this.dumpBlackWater());
+        document.getElementById('blackwater-cleanup-btn').addEventListener('click', () => this.cleanUpSpill());
 
         document.getElementById('o2-target-input').addEventListener('change', e => {
             const v = parseFloat(e.target.value);
@@ -465,6 +498,8 @@ class StarshipGame {
         this.repairQueue            = [];
         this.cargo                  = Fabrication.defaultCargo();
         this.fabrication.addStarterFood();
+        this.fabrication.addStarterBox(); // kept empty for what comes off the wrecked drives
+        this.logistics.reset();
         this.moduleResale           = {};
         this._selectedCommsId       = null;
         // One seed drives everything: the sector layout and, on a separate
@@ -484,6 +519,11 @@ class StarshipGame {
         this._updateShipIdentityUI();
         this.launchScreen.style.display  = 'none';
         this.gameContainer.style.display = 'block';
+        // A new game always opens with every group expanded (a loaded save
+        // keeps whatever was last chosen).
+        this._collapsedGroups.clear();
+        this._saveDashboardLayout();
+        this._layoutCards();
         this._playDashboardIntro();
         this._startTimer();
         this._startAutosaveTimer();
@@ -563,8 +603,7 @@ class StarshipGame {
             this.gameActive = true;
             this.gamePaused = false;
             this._resetPauseMenuUI();
-            const savedBg = this.storyMessages?.['new-game']?.background ?? 'city';
-            this.setBackground(savedBg);
+            this._syncBackground();
             this._applySpeedUI();
             this._syncTargetInputs();
             this._updateShipIdentityUI();
@@ -677,10 +716,13 @@ class StarshipGame {
 
         if (fresh.rationing) {
             if (fresh.rationHours >= this.crewManager.WATER_RATION_GRACE_HOURS) {
-                if (!this._canAffordRationReset()) return; // also greyed out in the UI
-                const cost = this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
+                if (this._rationResetBlocker()) return; // also greyed out in the UI
+                const cost = this._rationResetCostL();
                 fresh.current -= cost;
                 fresh.level    = (fresh.current / fresh.capacity) * 100;
+                // Drunk and washed in: it ends up in the black water tank like any other use.
+                this.systems.blackWater.liquidL += cost * this.systemUpdate.blackFromUseFraction();
+                this.syncBlackWaterLevel();
             }
             fresh.rationing   = false;
             fresh.rationHours = 0;
@@ -690,10 +732,77 @@ class StarshipGame {
         this.updateDisplay();
     }
 
+    _rationResetCostL() {
+        return this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
+    }
+
+    // Why coming off rationing (past the grace period) can't happen yet: the
+    // tank has to hold the rehydration water, and the black water tank has to
+    // have room for it once it's been used.
+    _rationResetBlocker() {
+        const cost   = this._rationResetCostL();
+        const toBlack = cost * this.systemUpdate.blackFromUseFraction();
+        const fresh  = this.systems.freshWater;
+        if (fresh.current < cost) {
+            return `needs ${cost.toFixed(0)} L in the tank (${Math.ceil(cost - fresh.current)} L short)`;
+        }
+        const room = this.systemUpdate.blackRoomL();
+        if (room < toBlack - 1e-9) {
+            return `needs ${toBlack.toFixed(0)} L free in the black water tank (${Math.ceil(toBlack - room)} L short)`;
+        }
+        return null;
+    }
+
     _canAffordRationReset() {
+        return !this._rationResetBlocker();
+    }
+
+    // Spilled waste: what can be cleaned up now. Each litre goes back into the
+    // black water tank along with SPILL_CLEANUP_WATER_PER_L of fresh water used
+    // to clean it, so it needs that water and that much room in the tank. As
+    // much as can be is cleaned; the rest stays (and keeps exposing the crew).
+    cleanUpPlan() {
+        const su    = this.systemUpdate;
+        const spill = su.spilledL();
+        const per   = su.SPILL_CLEANUP_WATER_PER_L;
+        const room  = su.blackRoomL();
+        const fresh = this.systems.freshWater.current;
+        const canL  = Math.max(0, Math.min(spill, room / (1 + per), per > 0 ? fresh / per : spill));
+        return { spill, canL, waterL: canL * per, needWaterL: spill * per, needRoomL: spill * (1 + per) };
+    }
+
+    cleanUpBlocker() {
+        const plan = this.cleanUpPlan();
+        if (plan.spill <= 1e-9) return 'Nothing spilled';
+        if (plan.canL > 1e-6) return null;
+        if (this.systemUpdate.blackRoomL() <= 1e-6) {
+            return 'The black water tank is full — make room first (the water maker, moving solids to compost, or a dump)';
+        }
+        return 'No fresh water to clean up with';
+    }
+
+    cleanUpSpill() {
+        if (!this.gameActive || this.gamePaused || this.cleanUpBlocker()) return;
+        const plan  = this.cleanUpPlan();
+        const black = this.systems.blackWater;
         const fresh = this.systems.freshWater;
-        const cost  = this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew;
-        return fresh.current >= cost;
+        const share = plan.canL / plan.spill;
+        const liquid = (black.spillLiquidL || 0) * share;
+        const solid  = (black.spillSolidL  || 0) * share;
+        black.spillLiquidL = Math.max(0, (black.spillLiquidL || 0) - liquid);
+        black.spillSolidL  = Math.max(0, (black.spillSolidL  || 0) - solid);
+        if (this.systemUpdate.spilledL() < 1e-6) { black.spillLiquidL = 0; black.spillSolidL = 0; }
+        fresh.current = Math.max(0, fresh.current - plan.waterL);
+        fresh.level   = (fresh.current / fresh.capacity) * 100;
+        black.liquidL += liquid + plan.waterL;
+        black.solidL  += solid;
+        this.syncBlackWaterLevel();
+        const left = this.systemUpdate.spilledL();
+        this._showSaveStatus(left > 1e-6
+            ? `Cleaned up ${plan.canL.toFixed(1)} L — ${left.toFixed(1)} L still spilled`
+            : `Spill cleaned up, using ${plan.waterL.toFixed(1)} L of fresh water`,
+            left > 1e-6, document.getElementById('blackwater-cleanup-btn'));
+        this.updateDisplay();
     }
 
     // Vent the whole black water tank to space. Nobody dumps half a tank, so
@@ -720,18 +829,24 @@ class StarshipGame {
     // that's no longer full stops backing up, so exposure resets.
     syncBlackWaterLevel() {
         const black = this.systems.blackWater;
+        this.systemUpdate.settleResidue(); // solids moved out free the liquid they held
         black.current = black.liquidL + black.solidL + (black.residueL || 0);
         black.level   = (black.current / black.capacity) * 100;
-        if (black.level < this.systemUpdate.BLACK_WATER_FULL_PCT) black.exposureHours = 0;
+        if (this.systemUpdate.spilledL() <= 1e-9) black.exposureHours = 0;
     }
 
     // Every fabrication / cargo action the player can take (rules live in Fabrication).
     fabricationAction(action, { boxId, key } = {}) {
         if (!this.gameActive || this.gamePaused) return;
         const fab = this.fabrication;
+        const byDrone = this.logistics.tradeMode() === 'drone'; // from the yard: bought goods wait at the port
+        const waits = byDrone ? ` — it waits at ${this.logistics.PORT_NAME} for a drone` : '';
         switch (action) {
             case 'buy':
-                if (fab.buy(key)) this._showSaveStatus(`Bought 1 ${fab.ITEMS[key].name} for ${fab.ITEMS[key].price} credits`);
+                if (fab.buy(key)) this._showSaveStatus(`Bought 1 ${fab.ITEMS[key].name} for ${fab.ITEMS[key].price} credits${waits}`);
+                break;
+            case 'emptyBox':
+                if (fab.emptyBox(boxId)) this._showSaveStatus('Compost tipped out — the box is empty');
                 break;
             case 'fabricate':
                 if (fab.queueFabrication(key)) this._showSaveStatus(`${fab.RECIPES[key].name} added to the work queue`);
@@ -748,12 +863,19 @@ class StarshipGame {
                 fab.seal(boxId);
                 break;
             case 'sell': {
+                if (byDrone) {
+                    if (!fab.sellBlocker(boxId)) {
+                        fab.sell(boxId);
+                        this._showSaveStatus(`Compost away by drone — it's paid for at ${this.logistics.PORT_NAME}`);
+                    }
+                    break;
+                }
                 const earned = fab.sell(boxId);
                 if (earned > 0) this._showSaveStatus(`Sold compost for ${earned} credits`);
                 break;
             }
             case 'buyFood':
-                if (fab.buyFood()) this._showSaveStatus(`Bought ${fab.FOOD.caseSize} ${fab.FOOD.name.toLowerCase()} for ${fab.FOOD.price} credits`);
+                if (fab.buyFood()) this._showSaveStatus(`Bought ${fab.FOOD.caseSize} ${fab.FOOD.name.toLowerCase()} for ${fab.FOOD.price} credits${waits}`);
                 break;
             case 'repairStored':
                 this.startRepair(`box:${boxId}`);
@@ -768,6 +890,13 @@ class StarshipGame {
             }
             case 'sellModule': {
                 const name = fab.moduleName(fab.storedModule(boxId)?.moduleKey);
+                if (byDrone) {
+                    if (!fab.sellModuleBlocker(boxId)) {
+                        fab.sellModule(boxId);
+                        this._showSaveStatus(`${name} away by drone — it's paid for at ${this.logistics.PORT_NAME}`);
+                    }
+                    break;
+                }
                 const earned = fab.sellModule(boxId);
                 if (earned > 0) this._showSaveStatus(`Sold ${name} for ${earned} credits`);
                 break;
@@ -782,8 +911,10 @@ class StarshipGame {
     buyMarketItem(listingId, dest = 'fit') {
         if (!this.gameActive || this.gamePaused) return;
         const listing = (this.market || []).find(l => l.id === listingId);
+        const byDrone = this.logistics.tradeMode() === 'drone';
         if (!listing || !this.commsNav.purchase(listingId, dest)) return;
-        this._showSaveStatus(`Bought ${listing.name} for ${listing.price} credits${dest === 'store' ? ' — stored in a machine box' : ''}`);
+        const where = byDrone ? ` — it waits at ${this.logistics.PORT_NAME} for a drone` : dest === 'store' ? ' — stored in a machine box' : '';
+        this._showSaveStatus(`Bought ${listing.name} for ${listing.price} credits${where}`);
         this.updateDisplay();
     }
 
@@ -920,10 +1051,13 @@ class StarshipGame {
         this._displayBlackWater();
         this._displayTransceiver();
         this._displayWaterMaker();
+        this._displayLogistics();
         this._displayShipCapacity();
         this._displayCargo();
+        this._renderDroneRunScreen();
         this._displayEnvironment();
         this._displayLocation();
+        this._syncBackground();
         this._displayRepairQueue();
         this._layoutCards();
         // Contacts and market access follow the transceiver's live range.
@@ -1044,9 +1178,378 @@ class StarshipGame {
         const home = this.commsNav.home();
         if (!home) { nameEl.textContent = '—'; typeEl.textContent = ''; return; }
 
-        nameEl.textContent = home.name;
-        typeEl.textContent = this.commsNav.locationTypeLabel(home) +
+        // Where on the planet — Harlow's yard, Port Carrow, or in the air between
+        // them — with the planet on the line below, to keep the header narrow.
+        nameEl.textContent = this.logistics.isFlying()
+            ? this.logistics.locationLabel()
+            : this.logistics.berthName();
+        typeEl.textContent = `${home.name} · ${this.commsNav.locationTypeLabel(home)}` +
+            (this.logistics.atPort() ? ' · Spaceport' : this.logistics.isFlying() ? '' : ' · Salvage yard') +
             (this.inBreathableAtmosphere ? ' · Breathable atmosphere' : '');
+    }
+
+    // ── Propulsion & Logistics cards (logistics.js) ─────────────────────────
+    // Each card's parts (badge, headline, details, controls) are filled in
+    // from here; the drone card's rows vary with how many drones there are.
+    // Buttons carry data-logi-action, handled by one delegated listener
+    // (_bindEvents).
+
+    _displayLogistics() {
+        this._displayDrive('thrusters');
+        this._displayDrive('ionDrive');
+        this._displayDrones();
+    }
+
+    // A blocked button's tooltip says why; an enabled one's says what it does.
+    _logiBtn(action, label, blocker, data = {}, tip = '') {
+        const attrs = Object.entries(data).map(([k, v]) => ` data-${k}="${this._escapeHtml(String(v))}"`).join('');
+        const title = blocker ?? tip;
+        return `<button class="repair-btn" data-logi-action="${action}"${attrs}${blocker ? ' disabled' : ''}${title ? ` title="${this._escapeHtml(title)}"` : ''}>${label}</button>`;
+    }
+
+    _displayDrive(key) {
+        const prefix = key === 'thrusters' ? 'thrusters' : 'iondrive';
+        if (!document.getElementById(`card-${prefix}`)) return;
+        const lg   = this.logistics;
+        const sys  = this.systems[key];
+        const name = lg.DRIVE_NAMES[key];
+        const strip = this.repairQueue.find(t => t.kind === 'strip' && t.recipeKey === key);
+        const build = this.repairQueue.find(t => t.kind === 'fabricate' && t.recipeKey === key);
+        const fitted = sys && sys.installed !== false;
+
+        let badge, value, label, status, details = '', controls = '', blocker = null;
+        if (fitted && sys.destroyed) {
+            badge = 'WRECKED'; value = 'Wrecked'; label = 'beyond repair'; status = 'Critical';
+            const yields = Object.entries(lg.STRIP[key].yields).map(([k, n]) => `${n} ${this.fabrication.ITEMS[k].name.toLowerCase()}`).join(', ');
+            details = `<p>Seized and burnt out — not worth repairing. Stripping it for parts recovers <strong>${yields}</strong>
+                       and takes ${this._fmtRepairHours(lg.STRIP[key].hours)} of engineering work. The parts need an empty storage box.</p>`;
+            if (strip) {
+                details += `<p>Being stripped: ${strip.hoursRemaining.toFixed(1)}h of work left (${strip.status === 'in-progress' ? 'in progress' : 'queued'}).</p>`;
+            } else {
+                blocker  = lg.stripBlocker(key);
+                controls = this._logiBtn('strip', 'Strip for Parts', blocker, { key },
+                    'Engineers take the wreck apart in the Work Queue; the usable parts go into a storage box');
+            }
+        } else if (!fitted) {
+            badge = 'NOT FITTED'; value = '—'; label = 'not fitted'; status = 'Warning'; // a missing drive is never "fine"
+            if (key === 'thrusters') {
+                const recipe = this.fabrication.RECIPES.thrusters;
+                details = build
+                    ? `<p>Being built: ${build.hoursRemaining.toFixed(1)}h of work left (${build.status === 'in-progress' ? 'in progress' : 'queued'}).</p>`
+                    : `<p>New thrusters are fabricated in the Work Queue from ${this.fabrication.componentsLabel(recipe)}
+                       (${this._fmtRepairHours(recipe.hours)} of work). They lift her across to ${lg.PORT_NAME}.</p>`;
+            } else {
+                details = `<p>An ion drive is what gets her off the planet and between the stars. Salvaged ones turn up at
+                           ${lg.PORT_NAME}'s yards — get her there first.</p>`;
+            }
+        } else if (key === 'thrusters') {
+            badge = lg.isFlying() ? 'FLYING' : 'READY'; status = 'Normal';
+            value = lg.isFlying() ? `${Math.round(lg.game.flight.hoursLeft * 60)} min` : `${lg.hopFuelL()} L`;
+            label = lg.isFlying() ? `to ${lg.berthName(lg.game.flight.to)}` : 'fuel per hop';
+            const to = lg.berth() === 'port' ? 'yard' : 'port';
+            details = `<p>A hop between ${lg.YARD_NAME} and ${lg.PORT_NAME} is ${lg.YARD_TO_PORT_KM} km: about
+                       ${Math.round(lg.hopHours() * 60)} minutes and ${lg.hopFuelL()} L of fuel. Fuel aboard: ${this.systems.fuel.current.toFixed(1)} L.</p>`;
+            if (!lg.isFlying()) {
+                blocker  = lg.flyBlocker(to);
+                controls = this._logiBtn('fly', `Fly to ${lg.berthName(to)}`, blocker, { to },
+                    `Lift off on the atmospheric thrusters: about ${Math.round(lg.hopHours() * 60)} minutes and ${lg.hopFuelL()} L of fuel`);
+            }
+        } else {
+            badge = 'FITTED'; value = 'Fitted'; label = 'ion drive'; status = 'Normal';
+            details = '<p>Ready for space — travel between systems comes later.</p>';
+        }
+
+        this._fillCardHead(prefix, badge, status, value, label);
+        this._setHtmlIfChanged(document.getElementById(`${prefix}-details`), details);
+        this._setHtmlIfChanged(document.getElementById(`${prefix}-controls`),
+            (blocker ? `<span class="market-blocker">${this._escapeHtml(blocker)}</span>` : '') + controls);
+        this._setCardStatus(`card-${prefix}`, status, !fitted);
+    }
+
+    _fillCardHead(prefix, badge, status, value, label) {
+        const badgeEl = document.getElementById(`${prefix}-badge`);
+        badgeEl.textContent = badge;
+        badgeEl.className   = `status-badge ${this._badgeClass(status)}`;
+        document.getElementById(`${prefix}-value`).textContent = value;
+        document.getElementById(`${prefix}-label`).textContent = label;
+    }
+
+    _badgeClass(status) {
+        return status === 'Critical' ? 'badge-critical' : status === 'Warning' ? 'badge-warning' : 'badge-normal';
+    }
+
+    _displayDrones() {
+        if (!document.getElementById('card-drone')) return;
+        const lg = this.logistics;
+        const drones = lg.drones();
+        const held = this.portHold ?? [];
+        const heldMass = lg.holdMassKg();
+
+        let badge = 'NONE', status = 'Warning', value = '0', label = 'drones', rows = '';
+        if (drones.length) {
+            const home = drones.filter(d => lg.isHome(d)).length;
+            value  = String(drones.length);
+            label  = `${drones.length === 1 ? 'drone' : 'drones'} · ${home} home`;
+            const anyReady = drones.some(d => !lg.launchBlocker(d, { forSale: true })); // could fly, planned or not
+            badge  = lg.atPort() ? 'AT PORT' : anyReady ? 'READY' : home ? 'GROUNDED' : 'AWAY';
+            status = lg.atPort() || anyReady || home < drones.length ? 'Normal' : 'Warning';
+            rows = drones.map(d => this._droneRowHtml(d)).join('');
+        }
+
+        const holdLine = held.length
+            ? `<p class="logi-hold">Waiting at ${lg.PORT_NAME}: ${held.map(e => this._escapeHtml(lg.entryLabel(e))).join(', ')} (${heldMass.toFixed(0)} kg).</p>`
+            : `<p class="logi-hold">Nothing waiting at ${lg.PORT_NAME}.</p>`;
+        const intro = drones.length ? '' : `<p>Nothing bought reaches ${lg.YARD_NAME} by itself. A transfer drone (${lg.DRONE_PRICE} cr on the
+            market) ferries up to ${lg.droneSpec('payloadKg')} kg a run between here and ${lg.PORT_NAME}, ${lg.YARD_TO_PORT_KM} km away.</p>`;
+        const docks = this.droneDocks ?? 0;
+        const dockLine = `<p class="logi-docks">Drone docks: ${docks}${docks ? '' : ' — fabricate one in the Work Queue to charge a drone'}.</p>`;
+
+        this._fillCardHead('drone', badge, status, value, label);
+        this._setHtmlIfChanged(document.getElementById('drone-details'),
+            `${intro}${rows ? `<ul class="drone-list">${rows}</ul>` : ''}${holdLine}${dockLine}`);
+        this._setCardStatus('card-drone', status);
+    }
+
+    _droneRowHtml(d) {
+        const lg = this.logistics;
+        const cap = lg.droneSpec('batteryWh');
+        const chargePct = Math.round(100 * (d.chargeWh ?? 0) / cap);
+        const stateText = {
+            arriving:  `Flying over from ${lg.PORT_NAME} — ${this._fmtHrs(d.hoursLeft)}`,
+            outbound:  `Heading to ${lg.PORT_NAME} — ${this._fmtHrs(d.hoursLeft + lg.droneLegHours())} round trip left`,
+            returning: `On its way back — ${this._fmtHrs(d.hoursLeft)}`,
+            parked:    'Parked outside — not charging',
+            stowed:    'Stowed aboard — not charging',
+            docked:    (d.chargeWh ?? 0) >= cap - 1e-6 ? 'Docked — fully charged' : this._droneChargingText(d),
+        }[d.state] ?? d.state;
+        const carrying = [...(d.cargoOut ?? []), ...(d.cargoIn ?? [])];
+        const load = carrying.length ? ` · carrying ${carrying.map(e => this._escapeHtml(lg.entryLabel(e))).join(', ')}` : '';
+        const unit = lg.unitKey(d);
+        const task = this.repairQueue.find(t => t.systemKey === unit);
+
+        const id = { 'drone-id': d.id };
+        const planned = lg.plan(d);
+        const goingOut = lg.planOut(d).map(o => {
+            const box = this.fabrication._box(o.boxId);
+            return o.kind === 'module' && box?.module ? this.fabrication.moduleName(box.module.moduleKey) : 'compost';
+        });
+        const planLine = (planned.length || goingOut.length) && lg.isHome(d)
+            ? (goingOut.length ? `<div class="drone-meta">Selling: ${this._escapeHtml(goingOut.join(', '))}
+               (${lg.planOutMassKg(d).toFixed(0)} / ${lg.droneSpec('payloadKg')} kg)</div>` : '') +
+              (planned.length ? `<div class="drone-meta">Planned: ${planned.map(p => this._escapeHtml(lg.planItemLabel(lg._holdEntry(p.holdId), p.qty))).join(', ')}
+               (${lg.planMassKg(d).toFixed(0)} / ${lg.droneSpec('payloadKg')} kg)</div>` : '')
+            : '';
+        let actions = '';
+        if (lg.isHome(d)) {
+            if (!lg.atPort()) {
+                actions += this._logiBtn('planRun', 'Plan Run', null, id,
+                    `Choose what this drone brings back from the port, up to ${lg.droneSpec('payloadKg')} kg`);
+                actions += this._logiBtn('launch', 'Send to Port', lg.launchBlocker(d), id,
+                    `Fly to ${lg.PORT_NAME} and back (about ${this._fmtHrs(2 * lg.droneLegHours())}), bringing what's planned`);
+            }
+            if (d.state !== 'docked') actions += this._logiBtn('dock', 'Dock', lg.dockBlocker(d), id,
+                'Put it on a drone dock aboard, where it charges from spare generator power');
+            if (d.state !== 'stowed') actions += this._logiBtn('stow', 'Stow', lg.stowBlocker(d), id,
+                'Pack it away aboard: it counts toward the ship\'s mass and space, and doesn\'t charge');
+            if (d.state !== 'parked') actions += this._logiBtn('park', 'Park Outside', lg.parkBlocker(d), id,
+                'Set it down on the ground outside: frees its mass and space aboard, but it can\'t charge there, and the ship can\'t fly until it\'s back aboard');
+            if (!task && this.repairManager.canRepair(unit)) actions += this._logiBtn('repairDrone', 'Repair', null, id,
+                'Add its repair to the Work Queue');
+            // Only a docked drone charges, but the switch can be set at any time.
+            actions += `<button class="repair-btn drone-battery-btn${d.chargeFromBattery ? ' btn-on' : ''}" data-logi-action="batteryCharge" data-drone-id="${d.id}"
+                title="When spare generator power isn't enough, also charge from the ship's battery (never below ${this.systemUpdate.DOCK_BATTERY_FLOOR_PCT}%)">Charge from Battery: ${d.chargeFromBattery ? 'ON' : 'OFF'}</button>`;
+        }
+        const why = lg.isHome(d) && !lg.atPort() ? lg.launchBlocker(d) : null;
+        return `
+            <li class="drone-row" data-drone-id="${d.id}">
+                <div class="drone-title">${lg.droneLabel(d)} &middot; charge ${chargePct}% &middot; condition ${Math.round(d.repairPct ?? 100)}%${task ? ' · repair queued' : ''}</div>
+                <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, chargePct)}%"></div></div>
+                <div class="drone-meta">${stateText}${load}</div>
+                ${planLine}
+                ${why ? `<div class="market-blocker">${this._escapeHtml(why)}</div>` : ''}
+                <div class="drone-actions">${actions}</div>
+            </li>`;
+    }
+
+    // ── Plan Run screen: what a drone brings back from the port hold ────────
+
+    _openDroneRunScreen(droneId) {
+        this._planDroneId = droneId;
+        Overlay.show(this.droneRunScreen);
+        this._renderDroneRunScreen();
+    }
+
+    _closeDroneRunScreen() {
+        if (Overlay.isOpen(this.droneRunScreen)) Overlay.hide(this.droneRunScreen);
+    }
+
+    _renderDroneRunScreen() {
+        const bodyEl = document.getElementById('drone-run-body');
+        if (!bodyEl || !Overlay.isOpen(this.droneRunScreen)) return;
+        const lg = this.logistics;
+        const d  = lg.drone(this._planDroneId);
+        if (!d) { this._closeDroneRunScreen(); return; }
+        const payload = lg.droneSpec('payloadKg');
+        const mass    = lg.planMassKg(d);
+        const id      = { 'drone-id': d.id };
+        const kg      = n => `${Number(n.toFixed(1))} kg`;
+        document.getElementById('drone-run-title').textContent = `${lg.droneLabel(d)} — Plan Run`;
+
+        const planned = lg.plan(d).map(p => {
+            const entry = lg._holdEntry(p.holdId);
+            if (!entry) return '';
+            const { field, unitKg } = lg._entryUnit(entry);
+            const data = { ...id, 'hold-id': p.holdId };
+            const less = field && p.qty > 1 ? this._logiBtn('planRemove', '&minus;1', null, { ...data, qty: 1 }, 'Take one off the plan') : '';
+            return `
+                <li class="task-card task-card-static" data-plan-hold-id="${p.holdId}">
+                    <div class="task-info">
+                        <div class="task-title">${this._escapeHtml(lg.planItemLabel(entry, p.qty))}</div>
+                        <div class="task-meta">${kg(unitKg * p.qty)}</div>
+                    </div>
+                    <div class="cargo-box-actions">${less}${this._logiBtn('planRemove', 'Remove', null, { ...data, qty: 'all' }, 'Leave it at the port')}</div>
+                </li>`;
+        }).join('');
+
+        const waiting = (this.portHold ?? []).map(entry => {
+            const free = lg.availableQty(entry.id);
+            const { field, unitKg } = lg._entryUnit(entry);
+            const data = { ...id, 'hold-id': entry.id };
+            const fit  = lg.planMaxFit(d, entry.id);
+            const onOthers = lg.plannedQty(entry.id, d) > 0 ? ' · some is planned on another drone' : '';
+            let buttons;
+            if (field) {
+                buttons = this._logiBtn('planAdd', '+1', lg.planAddBlocker(d, entry.id, 1), { ...data, qty: 1 }, `Add one (${kg(unitKg)})`);
+                // "All that fits" only when that's more than one.
+                if (fit > 1) {
+                    buttons += this._logiBtn('planAdd', `+${fit} (all that fits)`, null, { ...data, qty: 'max' },
+                        `Add as many as fit in what's left of the ${payload} kg`);
+                }
+            } else {
+                buttons = this._logiBtn('planAdd', 'Add', lg.planAddBlocker(d, entry.id, 1), { ...data, qty: 1 }, `Add it to the run (${kg(unitKg)})`);
+            }
+            const tooHeavy = unitKg > payload ? ` · too heavy for any drone` : '';
+            return `
+                <li class="task-card task-card-static" data-hold-id="${entry.id}">
+                    <div class="task-info">
+                        <div class="task-title">${free > 0
+                            ? this._escapeHtml(lg.planItemLabel(entry, free)) + (free < lg.entryQty(entry) ? ` <span class="task-meta">(of ${this._escapeHtml(lg.entryLabel(entry))})</span>` : '')
+                            : this._escapeHtml(lg.entryLabel(entry))}</div>
+                        <div class="task-meta">${field ? `${kg(unitKg)} each` : kg(unitKg)}${onOthers}${tooHeavy}</div>
+                    </div>
+                    <div class="cargo-box-actions">${free > 0 ? buttons : '<span class="task-meta">all planned</span>'}</div>
+                </li>`;
+        }).join('');
+
+        // Going out: stored modules and finished compost, sold when it lands.
+        // A module going out frees its machine box for one coming back.
+        const fab = this.fabrication;
+        const outMass = lg.planOutMassKg(d);
+        const outgoing = lg.outCandidates().map(o => {
+            const box = fab._box(o.boxId);
+            const by  = lg.outPlannedBy(o.boxId);
+            const data = { ...id, 'box-id': o.boxId };
+            const isModule = o.kind === 'module';
+            const label = isModule
+                ? `${fab.moduleName(box.module.moduleKey)} (${Math.round(box.module.repairPct ?? 100)}%)`
+                : `${box.fillL.toFixed(1)} L of compost`;
+            const mass  = isModule ? fab.moduleMassKg(box.module) : box.fillL * fab.BOX.contentDensityKgPerL;
+            const value = isModule ? fab.moduleSaleValue(box.module) : fab.salePrice(box);
+            const repairing = isModule && this.repairQueue.some(t => t.systemKey === `box:${box.id}`)
+                ? ' · its queued repair is dropped when it goes' : '';
+            const button = by === d
+                ? this._logiBtn('planOutRemove', 'Remove', null, data, 'Keep it aboard')
+                : by ? '<span class="task-meta">going on another drone</span>'
+                : this._logiBtn('planOutAdd', 'Add', lg.planOutAddBlocker(d, o.boxId), data,
+                    isModule ? `Take it to the port and sell it; its machine box is free for something coming back`
+                             : `Take it to the port and sell it (as much as fits in what's left of the ${payload} kg)`);
+            return `
+                <li class="task-card task-card-static" data-out-box-id="${o.boxId}">
+                    <div class="task-info">
+                        <div class="task-title">${this._escapeHtml(label)} <span class="task-meta">— ${this._escapeHtml(fab.boxLabel(box))}</span></div>
+                        <div class="task-meta">${kg(mass)} · sells for about ${value} cr${repairing}</div>
+                    </div>
+                    <div class="cargo-box-actions">${button}</div>
+                </li>`;
+        }).join('');
+
+        const bar = (cls, label, kgNow) => `
+            <div class="drone-run-weight">
+                <div class="${cls}"><strong>${kg(kgNow)}</strong> of ${payload} kg ${label}</div>
+                <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, (kgNow / payload) * 100).toFixed(1)}%"></div></div>
+            </div>`;
+        const launchBlocker = lg.launchBlocker(d);
+        const html = `
+            <h3 class="overlay-section-title">Taking to the port to sell</h3>
+            ${bar('drone-run-out-weight-label', 'going out', outMass)}
+            <ul class="overlay-list" id="drone-run-outgoing">${outgoing || '<li class="task-empty">Nothing aboard to sell — stored modules and finished compost show here.</li>'}</ul>
+            <h3 class="overlay-section-title">Bringing back</h3>
+            ${bar('drone-run-weight-label', 'coming back', mass)}
+            <ul class="overlay-list" id="drone-run-planned">${planned || '<li class="task-empty">Nothing yet — add what you want from below.</li>'}</ul>
+            <h3 class="overlay-section-title">Waiting at ${lg.PORT_NAME}</h3>
+            <ul class="overlay-list" id="drone-run-waiting">${waiting || '<li class="task-empty">Nothing is waiting — buy from the market in Comms &amp; Nav first.</li>'}</ul>
+            <div class="drone-run-footer">
+                ${lg.plan(d).length || lg.planOut(d).length ? this._logiBtn('planClear', 'Clear Plan', null, id, 'Take everything off the plan, both ways') : ''}
+                ${this._logiBtn('launch', 'Send to Port', launchBlocker, id,
+                    `Fly to ${lg.PORT_NAME} and back (about ${this._fmtHrs(2 * lg.droneLegHours())}), selling what goes out and bringing back what's planned`)}
+            </div>
+            ${launchBlocker ? `<div class="market-blocker">${this._escapeHtml(launchBlocker)}</div>` : ''}`;
+        this._setHtmlIfChanged(bodyEl, html);
+    }
+
+    // What a docked drone that isn't full is charging from.
+    _droneChargingText(d) {
+        const p = this.systems.power;
+        const dockW = p.dockW ?? 0, fromBattery = p.dockBatteryW ?? 0;
+        if (dockW <= 0) {
+            if (!d.chargeFromBattery) return 'Docked — no spare generator power to charge it';
+            return `Docked — no spare generator power, and the battery is at its ${this.systemUpdate.DOCK_BATTERY_FLOOR_PCT}% floor`;
+        }
+        return `Docked — charging at ${Math.round(dockW)} W${fromBattery > 0.5 ? ` (${Math.round(fromBattery)} W from the battery)` : ''}`;
+    }
+
+    // Every Propulsion & Logistics action the player can take (rules live in Logistics).
+    logisticsAction(action, { key, droneId, to, holdId, qty, boxId } = {}) {
+        if (!this.gameActive || this.gamePaused) return;
+        const lg = this.logistics;
+        switch (action) {
+            case 'strip':
+                if (lg.queueStrip(key)) this._showSaveStatus(`Stripping the ${lg.DRIVE_NAMES[key].toLowerCase()} added to the work queue`);
+                break;
+            case 'fly':
+                if (lg.fly(to)) this._showSaveStatus(`Lifting off for ${lg.berthName(to)} — ${lg.hopFuelL()} L of fuel`);
+                break;
+            case 'launch':
+                if (lg.launch(droneId)) {
+                    this._closeDroneRunScreen();
+                    this._showSaveStatus(`Drone away to ${lg.PORT_NAME}`);
+                }
+                break;
+            case 'planRun':
+                this._openDroneRunScreen(droneId);
+                return;
+            case 'planAdd':    lg.planAdd(droneId, holdId, qty === 'max' ? 'max' : Number(qty) || 1); break;
+            case 'planRemove': lg.planRemove(droneId, holdId, qty === 'all' ? 'all' : Number(qty) || 1); break;
+            case 'planClear':  lg.planClear(droneId); break;
+            case 'planOutAdd':    lg.planOutAdd(droneId, boxId); break;
+            case 'planOutRemove': lg.planOutRemove(droneId, boxId); break;
+            case 'dock':  lg.setDroneBerth(droneId, 'docked'); break;
+            case 'batteryCharge': lg.toggleBatteryCharge(droneId); break;
+            case 'stow':  lg.setDroneBerth(droneId, 'stowed'); break;
+            case 'park':  lg.setDroneBerth(droneId, 'parked'); break;
+            case 'repairDrone':
+                this.startRepair(`drone:${droneId}`);
+                return; // startRepair redraws
+            case 'buyDrone':
+                if (lg.buyDrone()) this._showSaveStatus(lg.atPort() ? `Bought a transfer drone for ${lg.DRONE_PRICE} credits` : `Bought a transfer drone — it's flying itself over from ${lg.PORT_NAME}`);
+                break;
+            case 'buyFuel':
+                if (lg.buyFuel()) this._showSaveStatus(`Bought ${lg.FUEL.lotL} L of fuel for ${lg.fuelLotPrice()} credits${lg.tradeMode() === 'drone' ? ' — it waits at the port' : ''}`);
+                break;
+            default:
+                return;
+        }
+        this.updateDisplay();
     }
 
     _displayO2() {
@@ -1225,7 +1728,7 @@ class StarshipGame {
         toggleBtn.className   = 'toggle-btn ' + (sys.rationing ? 'btn-on' : 'btn-off');
         toggleBtn.disabled    = pastGrace && !canAffordReset;
         toggleBtn.title       = (pastGrace && !canAffordReset)
-            ? `Not enough fresh water to come off rationing — needs ${(this.systemUpdate.WATER_RATION_RESET_L_PER_CREW * this.crew).toFixed(0)} L`
+            ? `Can't come off rationing yet — it ${this._rationResetBlocker()}`
             : '';
 
         const timerRow = document.getElementById('freshwater-ration-timer-row');
@@ -1254,7 +1757,7 @@ class StarshipGame {
             resetRow.style.display = '';
             resetEl.textContent = canAffordReset
                 ? `uses ${cost.toFixed(0)} L to rehydrate`
-                : `needs ${cost.toFixed(0)} L in the tank (${Math.ceil(cost - sys.current)} L short)`;
+                : this._rationResetBlocker();
             resetEl.className = 'rate-value ' + (canAffordReset ? '' : 'rate-neg');
         } else {
             resetRow.style.display = 'none';
@@ -1395,11 +1898,11 @@ class StarshipGame {
         if (maker.installed && maker.active && sys.reclaimStarved && leftL > 0.05) {
             solidsEl.style.display = '';
             const what = residueL > 0.05
-                ? `${leftL.toFixed(1)} L is solid matter and residue`
+                ? `${leftL.toFixed(1)} L is solid matter and the liquid soaked into it`
                 : `${leftL.toFixed(1)} L is solid matter`;
             solidsEl.textContent = sys.liquidL < 0.05
-                ? `All the reclaimable liquid has been reclaimed. The remaining ${what} the water maker can't process — dump the tank (solids can go to a compost box).`
-                : `The water maker is reclaiming liquid as fast as it arrives. The other ${what} it can't process — dump the tank (solids can go to a compost box).`;
+                ? `All the free liquid has been reclaimed. The remaining ${what}, which the water maker can't process — move the solids to a compost box and the liquid they held can be reclaimed.`
+                : `The water maker is reclaiming liquid as fast as it arrives. The other ${what}, which it can't process — move the solids to a compost box and the liquid they held can be reclaimed.`;
         } else {
             solidsEl.style.display = 'none';
         }
@@ -1423,13 +1926,26 @@ class StarshipGame {
         dumpBtn.disabled = sys.current <= 0;
         document.getElementById('blackwater-fine').textContent = this.BLACK_WATER_DUMP_FINE;
 
+        // A spill: what it is, what cleaning it up takes, and the button (in
+        // place of the tank reading, which the gauge already shows).
+        const spill       = this.cleanUpPlan();
         const exposureRow = document.getElementById('blackwater-exposure-row');
-        if ((sys.exposureHours ?? 0) > 0) {
+        const cleanBtn    = document.getElementById('blackwater-cleanup-btn');
+        const statusEl    = document.getElementById('blackwater-status');
+        if (spill.spill > 1e-6) {
             exposureRow.style.display = '';
             document.getElementById('blackwater-exposure').textContent =
-                'Overflowing for ' + this._fmtHrs(sys.exposureHours) + ' — crew exposed';
+                `${spill.spill.toFixed(1)} L spilled in the cabin for ${this._fmtHrs(sys.exposureHours ?? 0)} — crew exposed. ` +
+                `Cleaning up uses ${spill.needWaterL.toFixed(1)} L of fresh water and needs ${spill.needRoomL.toFixed(1)} L free in the tank.`;
+            const blocker = this.cleanUpBlocker();
+            cleanBtn.style.display = '';
+            statusEl.style.display = 'none';
+            cleanBtn.disabled = !!blocker;
+            cleanBtn.title = blocker ?? `Puts the spill back in the tank, with ${spill.needWaterL.toFixed(1)} L of fresh water used to clean up`;
         } else {
             exposureRow.style.display = 'none';
+            cleanBtn.style.display = 'none';
+            statusEl.style.display = '';
         }
         this._setCardStatus('card-blackwater', sys.status);
     }
@@ -1501,8 +2017,6 @@ class StarshipGame {
         document.getElementById('watermaker-split-air').style.width   = (100 - blackPct) + '%';
         document.getElementById('watermaker-split-black-pct').textContent = blackPct + '%';
         document.getElementById('watermaker-split-air-pct').textContent   = (100 - blackPct) + '%';
-        document.getElementById('watermaker-yield').textContent =
-            sys.reclaimYield != null ? Math.round(sys.reclaimYield * 100) + '% (rest stays as residue)' : '—';
         document.getElementById('watermaker-draw').textContent   = (sys.drawW ?? 0) > 0 ? '−' + sys.drawW.toFixed(2) + ' W' : '0.00 W';
 
         document.getElementById('watermaker-status').innerHTML =
@@ -1563,7 +2077,18 @@ class StarshipGame {
         const battery = this._batterySpec();
         items.push({ label: battery.label, count: 1, massKg: battery.massKg, volumeM3: battery.volumeM3 });
 
+        [['thrusters', 'Atmospheric Thrusters'], ['ionDrive', 'Ion Drive']]
+            .filter(([key]) => this.systems[key] && this.systems[key].installed !== false)
+            .forEach(([key, label]) => {
+                const sys = this.systems[key];
+                items.push({
+                    label: label + (sys.destroyed ? ' (wrecked)' : ''), count: 1,
+                    massKg: this._moduleField(key, sys.tier ?? 1, 'massKg', 0), volumeM3: this._moduleField(key, sys.tier ?? 1, 'volumeM3', 0),
+                });
+            });
+
         items.push(...this.fabrication.capacityItems());
+        items.push(...this.logistics.capacityItems());
 
         const tankSpecs = this._tankSpecs();
         [['fuel', tankSpecs.fuel], ['freshWater', tankSpecs.freshWater], ['blackWater', tankSpecs.blackWater]]
@@ -1954,7 +2479,7 @@ class StarshipGame {
             <li class="task-card task-card-static" data-item-key="${key}">
                 <div class="task-info">
                     <div class="task-title">${item.name} &times; <span class="cargo-count">${fab.count(key)}</span></div>
-                    <div class="task-meta">${item.blurb}</div>
+                    <div class="task-meta">${item.blurb} ${item.massKg} kg, ${item.litres} L of box space each.</div>
                 </div>
             </li>`).join('');
 
@@ -1962,22 +2487,23 @@ class StarshipGame {
         const machines = fab.machineBoxes().map(box => this._machineBoxHtml(box)).join('');
         const solidL   = this.systems.blackWater.solidL;
         const recipe   = fab.RECIPES.storageBox;
-        const plural   = recipe.components === 1 ? '' : 's';
         const machineRecipe = fab.RECIPES.machineBox;
 
         const html = `
             <h3 class="overlay-section-title">Supplies</h3>
+            <p class="repair-crew-status">Kept in parts boxes, below: components of both kinds and composting agent share a box.</p>
             <ul class="overlay-list">${supplies}</ul>
             <h3 class="overlay-section-title">Storage Boxes</h3>
             <p class="repair-crew-status">Food aboard: ${fab.rationsAboard().toFixed(1)} rations. Solid waste in the black water tank: ${solidL.toFixed(1)} L.
-               Each box holds ${fab.BOX.capacityL} L &mdash; or ${fab.BOX.capacityL} rations &mdash; and one kind of thing at a time.</p>
+               Each box holds ${fab.BOX.capacityL} L &mdash; or ${fab.BOX.capacityL} rations &mdash; and one kind of thing at a time:
+               food, parts, or compost.</p>
             <ul class="overlay-list" id="cargo-box-list">${boxes ||
-                `<li class="task-empty">No storage boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${recipe.components} basic component${plural}.</li>`}</ul>
+                `<li class="task-empty">No storage boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${fab.componentsLabel(recipe)}.</li>`}</ul>
             <h3 class="overlay-section-title">Machine Boxes</h3>
             <p class="repair-crew-status">Each holds one piece of equipment, switched off, without it taking a dashboard slot:
                a spare to swap in, or salvage to repair and sell at a profit.</p>
             <ul class="overlay-list" id="cargo-machine-list">${machines ||
-                `<li class="task-empty">No machine boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${machineRecipe.components} basic components and ${this._fmtRepairHours(machineRecipe.hours)}.</li>`}</ul>`;
+                `<li class="task-empty">No machine boxes. Engineers can fabricate one from the Work Queue &mdash; it takes ${fab.componentsLabel(machineRecipe)} and ${this._fmtRepairHours(machineRecipe.hours)}.</li>`}</ul>`;
         this._setHtmlIfChanged(bodyEl, html);
     }
 
@@ -1991,10 +2517,17 @@ class StarshipGame {
         switch (status) {
             case 'empty':
                 label   = 'Empty';
-                meta    = 'Food you buy goes into empty boxes, or add composting agent to use it for solid waste.';
+                meta    = 'Food and parts you buy, and parts stripped from the drives, go into empty boxes. Or add composting agent to use it for solid waste.';
                 blocker = fab.doseBlocker(box.id);
                 actions = btn('dose', 'Add Composting Agent', blocker);
                 break;
+            case 'parts': {
+                label   = 'Parts';
+                const what = Object.entries(box.parts ?? {}).map(([k, n]) => `${n} &times; ${fab.ITEMS[k]?.name ?? k}`).join(', ');
+                meta    = `${what || 'Nothing'} &middot; ${box.fillL.toFixed(0)} / ${fab.BOX.capacityL} L`;
+                fillPct = (box.fillL / fab.BOX.capacityL) * 100;
+                break;
+            }
             case 'food':
                 label   = 'Food';
                 meta    = `${box.fillL.toFixed(1)} / ${fab.BOX.capacityL} rations. The crew eat from the emptiest food box first.`;
@@ -2020,7 +2553,7 @@ class StarshipGame {
                 meta    = `${box.fillL.toFixed(1)} L of compost &middot; sells for ${fab.salePrice(box)} credits on a planet`;
                 fillPct = 100;
                 blocker = fab.sellBlocker(box.id);
-                actions = btn('sell', `Sell &middot; ${fab.salePrice(box)} cr`, blocker);
+                actions = btn('sell', this._sellLabel(fab.salePrice(box)), blocker) + btn('emptyBox', 'Tip Out', null);
                 break;
         }
 
@@ -2072,7 +2605,7 @@ class StarshipGame {
             const sellBlocker = fab.sellModuleBlocker(box.id);
             blocker = sellBlocker && swapBlocker ? swapBlocker : null;
             actions = repairBtn + btn('swap', swapLabel, swapBlocker) +
-                      btn('sellModule', `Sell &middot; ${fab.moduleSaleValue(mod)} cr`, sellBlocker);
+                      btn('sellModule', this._sellLabel(fab.moduleSaleValue(mod)), sellBlocker);
         }
 
         return `
@@ -2086,6 +2619,11 @@ class StarshipGame {
                 </div>
                 <div class="cargo-box-actions">${actions}</div>
             </li>`;
+    }
+
+    // From the yard a sale goes by drone and is paid for when it lands at the port.
+    _sellLabel(price) {
+        return this.logistics.tradeMode() === 'drone' ? `Send by Drone &middot; ~${price} cr` : `Sell &middot; ${price} cr`;
     }
 
     _selectCommsLocation(id) {
@@ -2213,33 +2751,43 @@ class StarshipGame {
         if (loc.kind !== 'home') {
             return '<p class="task-empty">No trade link. For now you can only buy in person, on a planet.</p>';
         }
+        if (this.logistics.isFlying()) {
+            return '<p class="task-empty">In flight — the market can wait until she\'s down.</p>';
+        }
         if (!this.commsNav.hasLocalDetails()) {
             return `<p class="task-empty">Local network out of range. Transceiver range is ${this.commsNav.rangeLy().toFixed(2)} ly;
                     the local market and news need ${this.commsNav.LOCAL_DETAILS_RANGE_LY} ly. Repair the transceiver and switch it on.</p>`;
         }
 
         const fab = this.fabrication;
-        const hasMachineBox = fab.machineBoxes().length > 0;
+        const lg  = this.logistics;
+        // From the yard a module to store is only an order waiting at the port, so
+        // it can be bought before there's a machine box free (or built) for it.
+        const byDrone  = lg.tradeMode() === 'drone';
+        const canStore = byDrone || fab.machineBoxes().length > 0;
         const listings = this.commsNav.listingsAt(loc);
         const rows = listings.map(l => {
             const blocker      = this.commsNav.purchaseBlocker(l, 'fit');
-            const storeBlocker = hasMachineBox ? this.commsNav.purchaseBlocker(l, 'store') : null;
-            // With a machine box, only say why when neither way of buying works.
-            const shown   = hasMachineBox ? (blocker && storeBlocker ? storeBlocker : null) : blocker;
+            const storeBlocker = canStore ? this.commsNav.purchaseBlocker(l, 'store') : null;
+            // With a way to store it, only say why when neither way of buying works.
+            const shown   = canStore ? (blocker && storeBlocker ? storeBlocker : null) : blocker;
             const gamble  = l.repairPct < 20 ? ' &middot; <span class="market-risk">repair is a gamble</span>' : '';
             const worth   = fab.moduleSaleValue({ moduleKey: l.moduleKey, repairPct: 100 });
-            const storeBtn = hasMachineBox
-                ? `<button class="repair-btn market-store-btn" data-listing-id="${l.id}" ${storeBlocker ? `disabled title="${storeBlocker}"` : ''}>Buy &amp; Store &middot; ${l.price} cr</button>`
+            const storeTip = byDrone
+                ? 'Waits at the port; a drone can bring it back once there is an empty machine storage box for it'
+                : 'Goes into an empty machine storage box';
+            const storeBtn = canStore
+                ? `<button class="repair-btn market-store-btn" data-listing-id="${l.id}" title="${storeBlocker ?? storeTip}" ${storeBlocker ? 'disabled' : ''}>${byDrone ? 'Order to Store' : 'Buy &amp; Store'} &middot; ${l.price} cr</button>`
                 : '';
             return `
                 <li class="market-card" data-listing-id="${l.id}">
                     <div class="market-info">
                         <div class="market-name">${this._escapeHtml(l.name)}</div>
-                        <div class="market-meta">Condition ${Math.round(l.repairPct)}%${gamble} &middot; sells for ${worth} cr fully repaired</div>
+                        <div class="market-meta">Condition ${Math.round(l.repairPct)}%${gamble} &middot; ${fab.moduleMassKg({ moduleKey: l.moduleKey, tier: 1 })} kg &middot; sells for ${worth} cr fully repaired</div>
                         ${shown ? `<div class="market-blocker">${shown}</div>` : ''}
                     </div>
                     <div class="market-buttons">
-                        <button class="repair-btn market-buy-btn" data-listing-id="${l.id}" ${blocker ? `disabled title="${blocker}"` : ''}>Buy &amp; Fit &middot; ${l.price} cr</button>
+                        <button class="repair-btn market-buy-btn" data-listing-id="${l.id}" ${blocker ? `disabled title="${blocker}"` : ''}>${lg.tradeMode() === 'drone' ? 'Order to Fit' : 'Buy &amp; Fit'} &middot; ${l.price} cr</button>
                         ${storeBtn}
                     </div>
                 </li>`;
@@ -2257,6 +2805,26 @@ class StarshipGame {
                     <button class="repair-btn" data-fab-action="buy" data-key="${key}" ${blocker ? 'disabled' : ''}>Buy &middot; ${item.price} cr</button>
                 </li>`;
         }).join('');
+
+        const droneBlocker = lg.buyDroneBlocker();
+        const fuelBlocker  = lg.buyFuelBlocker();
+        const logisticsRows = `
+                <li class="market-card" data-supply-key="drone">
+                    <div class="market-info">
+                        <div class="market-name">${lg.DRONE_NAME}</div>
+                        <div class="market-meta">Carries ${lg.droneSpec('payloadKg')} kg at ${lg.droneSpec('speedKmh')} km/h. Flies itself to you, charged. Owned: ${lg.drones().length}</div>
+                        ${droneBlocker ? `<div class="market-blocker">${droneBlocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-logi-action="buyDrone" ${droneBlocker ? 'disabled' : ''}>Buy &middot; ${lg.DRONE_PRICE} cr</button>
+                </li>
+                <li class="market-card" data-supply-key="fuel">
+                    <div class="market-info">
+                        <div class="market-name">${lg.FUEL.name} &mdash; ${lg.FUEL.lotL} L</div>
+                        <div class="market-meta">${lg.FUEL.pricePerL} cr a litre. In the tank: ${this.systems.fuel.current.toFixed(1)} / ${this.systems.fuel.capacity} L</div>
+                        ${fuelBlocker ? `<div class="market-blocker">${fuelBlocker}</div>` : ''}
+                    </div>
+                    <button class="repair-btn" data-logi-action="buyFuel" ${fuelBlocker ? 'disabled' : ''}>Buy &middot; ${lg.fuelLotPrice()} cr</button>
+                </li>`;
 
         const foodBlocker = fab.buyFoodBlocker();
         const foodRow = `
@@ -2281,7 +2849,7 @@ class StarshipGame {
                         <div class="market-meta">${condition}</div>
                         ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                     </div>
-                    <button class="repair-btn" data-fab-action="sellModule" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>Sell &middot; ${fab.moduleSaleValue(m)} cr</button>
+                    <button class="repair-btn" data-fab-action="sellModule" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>${this._sellLabel(fab.moduleSaleValue(m))}</button>
                 </li>`;
         }).join('');
 
@@ -2298,16 +2866,23 @@ class StarshipGame {
                         <div class="market-meta">${box.fillL.toFixed(1)} L</div>
                         ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                     </div>
-                    <button class="repair-btn" data-fab-action="sell" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>Sell &middot; ${fab.salePrice(box)} cr</button>
+                    <button class="repair-btn" data-fab-action="sell" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>${this._sellLabel(fab.salePrice(box))}</button>
                 </li>`;
             }).join('');
 
+        const tradeNote = lg.tradeMode() === 'drone'
+            ? `<p class="market-mode">You're at ${lg.YARD_NAME}, ${lg.YARD_TO_PORT_KM} km out. What you buy waits at ${lg.PORT_NAME} until a drone
+               fetches it (up to ${lg.droneSpec('payloadKg')} kg a run); what you sell goes by drone and is paid for when it lands.${
+               lg.drones().length ? '' : ' <strong>Buy a transfer drone first.</strong>'}</p>`
+            : `<p class="market-mode">Berthed at ${lg.PORT_NAME}: everything comes straight aboard.</p>`;
+
         return `
+            ${tradeNote}
             <h4 class="comms-services-title">Items for Sale</h4>
             <p class="market-credits">Your credits: <strong>${this.credits}</strong></p>
             <ul class="market-list">${rows || '<li class="task-empty">Nothing for sale right now.</li>'}</ul>
             <h4 class="comms-services-title">Supplies</h4>
-            <ul class="market-list">${foodRow}${supplies}</ul>
+            <ul class="market-list">${logisticsRows}${foodRow}${supplies}</ul>
             <h4 class="comms-services-title">Buying</h4>
             <p class="market-credits">Compost &mdash; ${fab.COMPOST_PRICE_PER_L} credits a litre.</p>
             <ul class="market-list">${compostRows || '<li class="task-empty">You have no finished compost to sell.</li>'}</ul>
@@ -2440,6 +3015,10 @@ class StarshipGame {
     }
 
     _repairSystemLabel(systemKey) {
+        if (this.repairManager.isDroneUnit(systemKey)) {
+            const drone = this.logistics.drone(systemKey.slice(6));
+            return drone ? this.logistics.droneLabel(drone) : 'Transfer drone';
+        }
         if (this.repairManager.isStoredUnit(systemKey)) {
             const boxId = systemKey.slice(4);
             const box   = this.fabrication.boxes().find(b => b.id === boxId);
@@ -2459,7 +3038,7 @@ class StarshipGame {
         const listEl = document.getElementById('repair-available-list');
         if (!listEl) return;
 
-        const rows = [...this.repairManager.repairableKeys(), ...this.repairManager.storedKeys()]
+        const rows = [...this.repairManager.repairableKeys(), ...this.repairManager.storedKeys(), ...this.repairManager.droneKeys()]
             .filter(key => this.repairManager.canRepair(key))
             .map(key => {
                 const info = this.repairManager.describeRepair(key, this._repairTargets[key]);
@@ -2495,12 +3074,12 @@ class StarshipGame {
         const fab = this.fabrication;
         const html = Object.entries(fab.RECIPES).map(([key, recipe]) => {
             const blocker = fab.fabricateBlocker(key);
-            const plural  = recipe.components === 1 ? '' : 's';
+            const have = Object.keys(recipe.components).map(k => `${fab.count(k)} ${fab.ITEMS[k].name.toLowerCase().replace(' components', '')}`).join(', ');
             return `
                 <li class="task-card task-card-static" data-recipe-key="${key}">
                     <div class="task-info">
                         <div class="task-title">${recipe.name}</div>
-                        <div class="task-meta">${recipe.components} basic component${plural} (${fab.count('basicComponents')} aboard) &middot; ${this._fmtRepairHours(recipe.hours)} of engineering work</div>
+                        <div class="task-meta">${fab.componentsLabel(recipe)} (aboard: ${have}) &middot; ${this._fmtRepairHours(recipe.hours)} of engineering work</div>
                         ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                     </div>
                     <button class="repair-btn" data-fab-action="fabricate" data-key="${key}" ${blocker ? 'disabled' : ''}>Fabricate</button>
@@ -2510,16 +3089,17 @@ class StarshipGame {
     }
 
     _fabricationTaskHtml(task) {
-        const recipe = this.fabrication.RECIPES[task.recipeKey];
+        const strip  = task.kind === 'strip';
+        const recipe = strip ? { name: this.logistics.DRIVE_NAMES[task.recipeKey] } : this.fabrication.RECIPES[task.recipeKey];
         const progressPct = task.totalHours > 0
             ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
         return `
             <li class="task-card task-card-fabricate" draggable="true" data-task-id="${task.id}">
                 <span class="task-drag-handle">&#10495;</span>
                 <div class="task-info">
-                    <div class="task-title">Fabricate &mdash; ${recipe ? recipe.name : task.recipeKey}</div>
+                    <div class="task-title">${strip ? 'Strip for Parts' : 'Fabricate'} &mdash; ${recipe ? recipe.name : task.recipeKey}</div>
                     <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
-                    <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${this._fmtRepairHours(task.totalHours)} &middot; cancelling returns its components</div>
+                    <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${this._fmtRepairHours(task.totalHours)} &middot; ${strip ? 'cancelling leaves it as it is' : 'cancelling returns its components'}</div>
                 </div>
                 <button class="task-cancel-btn" data-task-id="${task.id}">Cancel</button>
             </li>`;
@@ -2549,7 +3129,7 @@ class StarshipGame {
         }
 
         listEl.innerHTML = this.repairQueue.map(task => {
-            if (task.kind === 'fabricate') return this._fabricationTaskHtml(task);
+            if (this.repairManager.isJob(task)) return this._fabricationTaskHtml(task);
             const progressPct = task.totalHours > 0
                 ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
             const stageTop = this.repairManager._taskStage(task).toPct;

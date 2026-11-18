@@ -1,7 +1,8 @@
 /* ══════════════════════════════════════════════════════════════════
    BACKGROUND THEMES
-   Switch by setting data-bg on <body>: "space" | "city"
-   JS helper: game.setBackground('space' | 'city')
+   Switch by setting data-bg on <body>: "space" | "city" | "port" | "flight"
+   JS helper: game.setBackground(theme). In a game, main.js _syncBackground
+   picks it from where the ship is: city (Harlow's yard), port, or flight.
    ══════════════════════════════════════════════════════════════════ */
 
 /* ── SPACE — deep-void starfield ── */
@@ -9,25 +10,26 @@
 body[data-bg="space"] {
     background: linear-gradient(135deg, #0c1445 0%, #1a1a2e 100%);
 }
+/* Three layers of scattered stars — faint and many, brighter and fewer,
+   brightest and rare — on tiles of unrelated sizes, so no grid shows. Each
+   layer drifts its own tile height per loop: the nearer, brighter stars move
+   faster, and every loop is seamless. */
 body[data-bg="space"]::before {
     content: "";
     position: fixed;
     inset: 0;
     background-image:
-        radial-gradient(2px 2px at  20px  30px, #eee, transparent),
-        radial-gradient(2px 2px at  40px  70px, #fff, transparent),
-        radial-gradient(1px 1px at  90px  40px, #fff, transparent),
-        radial-gradient(1px 1px at 130px  80px, #fff, transparent),
-        radial-gradient(2px 2px at 160px  30px, #fff, transparent),
-        radial-gradient(1px 1px at 200px  70px, #fff, transparent);
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='397' height='283'><g fill='%23ffffff'><circle cx='0' cy='261' r='0.52' fill-opacity='0.32'/><circle cx='290' cy='151' r='0.53' fill-opacity='0.51'/><circle cx='300' cy='154' r='0.67' fill-opacity='0.47'/><circle cx='324' cy='68' r='0.55' fill-opacity='0.50'/><circle cx='277' cy='15' r='0.67' fill-opacity='0.41'/><circle cx='366' cy='228' r='0.45' fill-opacity='0.43'/><circle cx='366' cy='195' r='0.66' fill-opacity='0.45'/><circle cx='362' cy='257' r='0.55' fill-opacity='0.37'/><circle cx='332' cy='94' r='0.46' fill-opacity='0.35'/><circle cx='170' cy='83' r='0.77' fill-opacity='0.45'/><circle cx='290' cy='248' r='0.42' fill-opacity='0.35'/><circle cx='223' cy='144' r='0.57' fill-opacity='0.32'/><circle cx='361' cy='16' r='0.55' fill-opacity='0.37'/><circle cx='264' cy='262' r='0.61' fill-opacity='0.31'/><circle cx='161' cy='80' r='0.55' fill-opacity='0.40'/><circle cx='132' cy='150' r='0.65' fill-opacity='0.33'/><circle cx='360' cy='130' r='0.75' fill-opacity='0.47'/><circle cx='252' cy='146' r='0.60' fill-opacity='0.49'/><circle cx='373' cy='112' r='0.68' fill-opacity='0.34'/><circle cx='233' cy='99' r='0.53' fill-opacity='0.39'/><circle cx='316' cy='248' r='0.44' fill-opacity='0.54'/><circle cx='31' cy='115' r='0.46' fill-opacity='0.28'/></g></svg>"),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='541' height='367'><g fill='%23ffffff'><circle cx='539' cy='81' r='0.95' fill-opacity='0.51'/><circle cx='247' cy='218' r='0.76' fill-opacity='0.82'/><circle cx='479' cy='327' r='1.05' fill-opacity='0.81'/><circle cx='412' cy='101' r='0.70' fill-opacity='0.55'/><circle cx='41' cy='1' r='0.95' fill-opacity='0.54'/><circle cx='401' cy='180' r='0.98' fill-opacity='0.55'/><circle cx='477' cy='86' r='0.85' fill-opacity='0.81'/><circle cx='64' cy='180' r='0.70' fill-opacity='0.82'/><circle cx='345' cy='338' r='0.71' fill-opacity='0.81'/><circle cx='102' cy='356' r='0.93' fill-opacity='0.72'/><circle cx='144' cy='82' r='0.78' fill-opacity='0.68'/><circle cx='28' cy='282' r='0.98' fill-opacity='0.74'/><circle cx='270' cy='12' r='0.74' fill-opacity='0.82'/><circle cx='71' cy='252' r='1.06' fill-opacity='0.46'/></g></svg>"),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='709' height='461'><g fill='%23ffffff'><circle cx='626' cy='397' r='1.50' fill-opacity='0.99'/><circle cx='542' cy='193' r='1.12' fill-opacity='0.92'/><circle cx='625' cy='184' r='1.12' fill-opacity='0.82'/><circle cx='629' cy='258' r='1.18' fill-opacity='0.89'/><circle cx='521' cy='154' r='1.36' fill-opacity='0.83'/><circle cx='141' cy='144' r='1.49' fill-opacity='1.00'/><circle cx='448' cy='402' r='1.46' fill-opacity='0.76'/></g></svg>");
     background-repeat: repeat;
-    background-size: 250px 150px;
-    animation: starscroll 20s linear infinite;
+    background-size: 397px 283px, 541px 367px, 709px 461px;
+    animation: starscroll 30s linear infinite;
     z-index: -1;
 }
 @keyframes starscroll {
-    from { transform: translateY(0); }
-    to   { transform: translateY(-150px); }
+    from { background-position: 0 0, 0 0, 0 0; }
+    to   { background-position: 0 -283px, 0 -367px, 0 -461px; }
 }
 
 /* ── CITY — Kel Veth III, dystopian planet surface ── */
@@ -72,15 +74,129 @@ body[data-bg="city"]::before {
     z-index: -1;
 }
 
-/* Horizon pollution haze and ambient glow from city lights */
+/* In front of the skyline: Harlow's lot, only implied like the buildings —
+   one dark mass of hull shapes, a gantry crane, a ship broken in two and
+   stacked plate. Behind it, the horizon haze and the glow of city lights. */
 body[data-bg="city"]::after {
     content: "";
     position: fixed;
     inset: 0;
     background:
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 320' preserveAspectRatio='none'><path fill='%230a0403' d='M0 320V300H40L70 236L150 212L460 200L500 186L520 236L540 240V300H830L846 252L912 226H1062L1100 196V262H1066V300H1150L1166 256L1228 240H1296L1300 300H1340L1346 254L1450 246L1514 252V300H1530V266H1600V320Z'/><path fill='%230a0403' d='M600 300V96H586V82H800V96H786V300H772V96H614V300Z'/></svg>") bottom / 100% 30% no-repeat,
         radial-gradient(ellipse 130% 28% at 50% 67%, rgba(165, 62, 12, 0.32) 0%, transparent 70%),
         radial-gradient(ellipse 60%  14% at 22% 65%, rgba( 90, 28,  4, 0.22) 0%, transparent 100%),
         radial-gradient(ellipse 55%  12% at 78% 64%, rgba(120, 44,  8, 0.20) 0%, transparent 100%);
     z-index: -1;
     pointer-events: none;
 }
+
+/* ── PORT — Port Carrow spaceport at night ── */
+/* Berthed at the port (logistics.js). Cooler light than the yard: floodlit   */
+/* pads, launch gantries, a control tower, ships standing on their fins —    */
+/* in the middle of the city, whose towers stand behind in the haze.          */
+body[data-bg="port"] {
+    /* Brightest low down, where the pad floodlights light the haze, so the
+       skylines stand out against it. */
+    background: linear-gradient(180deg,
+        #03050d  0%,
+        #070e22 30%,
+        #0d2038 55%,
+        #1a4058 74%,
+        #2a6176 88%,
+        #1d4a5c 100%
+    );
+}
+/* Silhouette: hangars, control tower with its dish, gantries, a ship on the pad, a freighter hull */
+body[data-bg="port"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 400' preserveAspectRatio='none'><g fill='%23070b14'><path d='M0 400V330Q70 280 140 330V400Z'/><path d='M120 400V345Q190 300 260 345V400Z'/><rect x='300' y='170' width='26' height='230'/><rect x='284' y='150' width='58' height='26' rx='4'/><rect x='311' y='105' width='4' height='46'/><path d='M350 120a34 34 0 0 1 48 34l-24 -10z'/><rect x='372' y='150' width='4' height='30'/><rect x='430' y='300' width='120' height='100'/><rect x='560' y='110' width='20' height='290'/><rect x='580' y='140' width='62' height='8'/><rect x='580' y='220' width='62' height='8'/><path d='M650 400V215Q675 120 700 215V400Z'/><path d='M650 340L620 400H650Z'/><path d='M700 340L730 400H700Z'/><rect x='760' y='330' width='140' height='70'/><rect x='790' y='300' width='60' height='30'/><path d='M930 400V350H1180Q1240 350 1250 380L1252 400Z'/><rect x='980' y='325' width='90' height='25' rx='6'/><rect x='1280' y='130' width='18' height='270'/><rect x='1298' y='160' width='54' height='7'/><path d='M1360 400V250Q1380 170 1400 250V400Z'/><rect x='1420' y='290' width='70' height='110'/><rect x='1500' y='320' width='100' height='80'/><rect x='1535' y='270' width='16' height='50'/></g><g fill='%2338c8d8' opacity='0.35'><rect x='440' y='320' width='8' height='4'/><rect x='470' y='320' width='8' height='4'/><rect x='500' y='320' width='8' height='4'/><rect x='770' y='350' width='120' height='3'/><rect x='1430' y='310' width='6' height='3'/><rect x='1450' y='310' width='6' height='3'/><rect x='292' y='158' width='42' height='5'/></g></svg>"),
+        /* Behind the port, the city it sits in: blocky towers a shade darker
+           than the sky, fading out at their base into the floodlit haze. */
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 400' preserveAspectRatio='none'><defs><linearGradient id='f' x1='0' y1='0' x2='0' y2='1'><stop offset='0' stop-color='%230b1a2c'/><stop offset='0.65' stop-color='%230b1a2c'/><stop offset='1' stop-color='%230b1a2c' stop-opacity='0'/></linearGradient></defs><path fill='url(%23f)' d='M0 400V190H50V150H95V210H130V120H150V70H158V120H190V175H240V140H290V230H330V100H385V160H420V200H470V130H500V60H508V130H545V185H600V150H650V215H690V110H745V170H790V135H840V200H880V95H905V40H913V95H935V160H985V125H1040V190H1080V145H1130V105H1165V175H1210V130H1250V80H1258V130H1290V195H1340V150H1390V115H1440V180H1480V140H1530V200H1570V160H1600V400Z'/></svg>");
+    background-repeat: no-repeat;
+    background-size: 100% 55%, 100% 50%;
+    background-position: bottom, center 80%;
+    z-index: -1;
+}
+/* Floodlight glow on the pads, and red beacons on the tower and gantries that blink */
+body[data-bg="port"]::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(3px 3px at 19.6% 55.5%, #ff5252, transparent),
+        radial-gradient(3px 3px at 35.6% 68%,   #ff5252, transparent),
+        radial-gradient(3px 3px at 80.6% 69.5%, #ff5252, transparent),
+        radial-gradient(ellipse 40% 10% at 42% 95%, rgba(56, 200, 216, 0.16) 0%, transparent 100%),
+        radial-gradient(ellipse 30% 9%  at 70% 96%, rgba(255, 196, 120, 0.12) 0%, transparent 100%),
+        radial-gradient(ellipse 120% 22% at 50% 70%, rgba(40, 120, 150, 0.22) 0%, transparent 70%);
+    animation: port-beacons 2.4s steps(1, end) infinite;
+    z-index: -1;
+    pointer-events: none;
+}
+@keyframes port-beacons {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.75; }
+}
+
+/* ── FLIGHT — the hop between Harlow's yard and Port Carrow ── */
+/* Low over the planet on atmospheric thrusters: the skyline streams past     */
+/* in two layers, near faster than far, under thin speed streaks.             */
+body[data-bg="flight"] {
+    background: linear-gradient(180deg,
+        #04030a  0%,
+        #0b0a1c 25%,
+        #1a1430 48%,
+        #3a2236 64%,
+        #5a2e2a 74%,
+        #2a141a 88%,
+        #110a0c 100%
+    );
+}
+body[data-bg="flight"]::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 200' preserveAspectRatio='none'><path fill='%23180c10' d='M0 200V120H30V90H55V130H80V70H90V40H96V70H110V110H150V85H190V140H210V60H240V100H280V130H300V80H320V50H330V80H360V120H400V95H430V135H470V75H500V105H540V60H548V35H556V60H570V125H610V90H650V140H680V100H720V70H760V115H800V200Z'/></svg>");
+    background-repeat: repeat-x;
+    background-size: 800px 34%;
+    background-position: 0 100%;
+    animation: flight-far 24s linear infinite;
+    z-index: -1;
+}
+body[data-bg="flight"]::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 200' preserveAspectRatio='none'><path fill='%230a0507' d='M0 200V150H40V120H70V160H120V100H150V140H200V170H240V110H260V80H268V110H290V150H340V125H380V165H430V105H470V145H520V130H560V160H600V200Z'/></svg>"),
+        repeating-linear-gradient(90deg, transparent 0 140px, rgba(255, 255, 255, 0.06) 140px 220px, transparent 220px 420px),
+        repeating-linear-gradient(90deg, transparent 0 60px,  rgba(255, 255, 255, 0.04) 60px 110px,  transparent 110px 420px),
+        repeating-linear-gradient(90deg, transparent 0 260px, rgba(255, 200, 160, 0.05) 260px 330px, transparent 330px 420px);
+    background-repeat: repeat-x;
+    background-size: 600px 24%, 420px 2px, 420px 1px, 420px 2px;
+    background-position: 0 100%, 0 30%, 0 46%, 0 58%;
+    animation: flight-near 7s linear infinite;
+    z-index: -1;
+    pointer-events: none;
+}
+@keyframes flight-far  { from { background-position: 0 100%; } to { background-position: -800px 100%; } }
+@keyframes flight-near {
+    from { background-position: 0 100%, 0 30%, 0 46%, 0 58%; }
+    to   { background-position: -600px 100%, -840px 30%, -1260px 46%, -840px 58%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-bg="space"]::before,
+    body[data-bg="port"]::after,
+    body[data-bg="flight"]::before,
+    body[data-bg="flight"]::after { animation: none; }
+}
+
+/* Every sky is fixed to the window, like the skyline layers in front of it.
+   Otherwise the gradient stretches over the whole (long) dashboard and
+   scrolls, sliding the light behind skylines that stay put. Last in the
+   file, so it wins over the `background` shorthands above. */
+body[data-bg] { background-attachment: fixed; }

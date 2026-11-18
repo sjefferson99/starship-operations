@@ -127,7 +127,11 @@ class Notifications {
             crew: (g.crewManifest ?? []).map(m => ({ id: m.id, status: g.crewManager.statusFor(m) })),
             modules,
             market: (g.market ?? []).map(l => ({ id: l.id, name: l.name, repairPct: l.repairPct })),
-            supplies: { ...(g.cargo?.items ?? {}) },
+            supplies: Object.fromEntries(Object.keys(fab.ITEMS).map(k => [k, fab.count(k)])),
+            held: g.logistics.holdMassKg(),
+            drones: g.logistics.drones().length,
+            // Each drone's condition, to hear about a repair stage landing on one.
+            droneUnits: g.logistics.drones().map(d => ({ id: d.id, label: g.logistics.droneLabel(d), pct: d.repairPct ?? 100 })),
             boxes,
             food: fab.rationsAboard(),
             swaps: fab.swapCount,
@@ -202,9 +206,20 @@ class Notifications {
         const storedIn = now.boxes.find(b => b.module && !prev.boxes.find(p => p.id === b.id)?.module);
         bought.forEach(l => {
             const pct = l.repairPct != null ? ` in ${Math.round(l.repairPct)}% condition` : '';
-            const where = storedIn ? ` Stored in ${storedIn.label}${pct}.` : (pct ? ` Fitted${pct}.` : '');
+            const ordered = now.held > prev.held + 1e-9;
+            const where = ordered ? ` Waiting at ${g.logistics.PORT_NAME} for a drone${pct}.`
+                : storedIn ? ` Stored in ${storedIn.label}${pct}.` : (pct ? ` Fitted${pct}.` : '');
             this.add({ level: 'info', title: `Bought ${l.name}`, detail: `${spent} credits.${where}` });
         });
+
+        // Bought from the yard: it waits at the port for a drone. (A market
+        // listing ordered this way is listed above.)
+        if (spent > 0 && !bought.length && now.held > prev.held + 1e-9) {
+            this.add({ key: 'order', level: 'info', title: 'Order placed', detail: `${spent} credits — waiting at ${g.logistics.PORT_NAME} for a drone run.` });
+        }
+        if (spent > 0 && now.drones > prev.drones) {
+            this.add({ level: 'info', title: 'Bought a transfer drone', detail: `${spent} credits.${g.logistics.atPort() ? '' : ` It's flying itself over from ${g.logistics.PORT_NAME}.`}` });
+        }
 
         // A stored module swapped with the fitted one: one entry, and the
         // fitted module's change of condition isn't a repair.
@@ -235,6 +250,14 @@ class Notifications {
                 this.add({ key: `module:${key}`, level: 'critical', title: `${name} destroyed`, detail: 'The repair failed. A replacement can be bought on the market.' });
             } else if (mod.installed && mod.pct - before.pct >= 5) {
                 this.add({ key: `module:${key}`, level: 'good', title: `${name} repaired to ${Math.round(mod.pct)}%`, detail: '' });
+            }
+        });
+
+        // Drones: a repair stage landing (flying only ever wears them down).
+        (now.droneUnits ?? []).forEach(d => {
+            const before = (prev.droneUnits ?? []).find(p => p.id === d.id);
+            if (before && d.pct - before.pct >= 5) {
+                this.add({ key: `drone:${d.id}`, level: 'good', title: `${d.label} repaired to ${Math.round(d.pct)}%`, detail: '' });
             }
         });
 

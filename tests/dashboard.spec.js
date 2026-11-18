@@ -27,15 +27,24 @@ test.describe('dashboard groups', () => {
         await expect(page.locator('#water-ration-toggle')).toBeVisible(); // other groups untouched
 
         await page.click('#collapse-all-btn');
-        await expect(page.locator('.card-group.collapsed')).toHaveCount(3);
+        await expect(page.locator('.card-group.collapsed')).toHaveCount(4);
         await expect(page.locator('#card-blackwater .gauge-track')).toBeVisible();
         await expect(page.locator('#blackwater-dump-btn')).toBeHidden();
         // Remembered as a viewing preference.
-        expect(await page.evaluate(() => JSON.parse(localStorage.getItem('starshipOps.dashboardLayout')).collapsedGroups.length)).toBe(3);
+        expect(await page.evaluate(() => JSON.parse(localStorage.getItem('starshipOps.dashboardLayout')).collapsedGroups.length)).toBe(4);
 
         await page.click('#expand-all-btn');
         await expect(page.locator('.card-group.collapsed')).toHaveCount(0);
         await expect(page.locator('#o2-toggle')).toBeVisible();
+    });
+
+    test('a new game starts with every group expanded, whatever was collapsed before', async ({ page }) => {
+        await page.addInitScript(() => {
+            localStorage.setItem('starshipOps.dashboardLayout', JSON.stringify({ collapsedGroups: ['life-support', 'water'], expandedCards: [] }));
+        });
+        await startNewGame(page);
+        await expect(page.locator('.card-group.collapsed')).toHaveCount(0);
+        expect(await page.evaluate(() => JSON.parse(localStorage.getItem('starshipOps.dashboardLayout')).collapsedGroups)).toEqual([]);
     });
 
     test('each group header sums up its cards\' status', async ({ page }) => {

@@ -63,8 +63,19 @@ class RepairManager {
         return typeof systemKey === 'string' && systemKey.startsWith('box:');
     }
 
+    // A transfer drone (logistics.js) is a unit too: 'drone:<droneId>'.
+    isDroneUnit(systemKey) {
+        return typeof systemKey === 'string' && systemKey.startsWith('drone:');
+    }
+
+    // One-stage jobs that share the queue: fabrication, and stripping a wrecked drive.
+    isJob(task) {
+        return task.kind === 'fabricate' || task.kind === 'strip';
+    }
+
     // Map a unit key to the module type used in module_specs.json.
     _moduleType(systemKey) {
+        if (this.isDroneUnit(systemKey)) return 'transferDrone';
         const key = this.isStoredUnit(systemKey) ? this._sys(systemKey)?.moduleKey : systemKey;
         if (key === 'o2')    return 'o2Generator';
         if (key === 'co2')   return 'co2Scrubber';
@@ -74,6 +85,7 @@ class RepairManager {
 
     _sys(systemKey) {
         if (this.isStoredUnit(systemKey)) return this.game.fabrication.storedModule(systemKey.slice(4));
+        if (this.isDroneUnit(systemKey)) return this.game.logistics.drone(systemKey.slice(6));
         return this.game.systems[systemKey];
     }
 
@@ -97,6 +109,11 @@ class RepairManager {
     // switched off in a box, never wear — so decay() doesn't see them.
     storedKeys() {
         return this.game.fabrication.storedUnitKeys();
+    }
+
+    // Unit keys of the transfer drones. They wear as they fly (logistics.js), not here.
+    droneKeys() {
+        return this.game.logistics.droneKeys();
     }
 
     // ── Stages ──────────────────────────────────────────────────────────────
@@ -192,6 +209,7 @@ class RepairManager {
     canRepair(systemKey) {
         const sys = this._sys(systemKey);
         if (!sys || sys.destroyed || sys.installed === false) return false;
+        if (this.isDroneUnit(systemKey) && !this.game.logistics.isHome(sys)) return false; // out on a run
         if ((sys.repairPct ?? 100) >= this.REPAIR_AVAILABLE_BELOW_PCT) return false;
         return !this.game.repairQueue.some(t => t.systemKey === systemKey);
     }
@@ -263,7 +281,7 @@ class RepairManager {
 
     // Hours of work left on a task across every stage up to its target.
     remainingHours(task) {
-        if (task.kind === 'fabricate') return task.hoursRemaining;
+        if (this.isJob(task)) return task.hoursRemaining;
         const options = this.targetOptions(task.systemKey);
         const option  = options.find(o => o.targetPct === task.targetPct) ?? options[options.length - 1];
         return option ? option.hours : task.hoursRemaining;
@@ -315,8 +333,8 @@ class RepairManager {
                 if (workHours < task.hoursRemaining) { task.hoursRemaining -= workHours; break; }
                 workHours -= task.hoursRemaining;
                 task.hoursRemaining = 0;
-                // Fabrication jobs share the queue and the crew; they're one stage long.
-                if (task.kind === 'fabricate') this.game.fabrication.completeTask(task);
+                // Fabrication and stripping jobs share the queue and the crew; they're one stage long.
+                if (this.isJob(task)) this.game.fabrication.completeTask(task);
                 else this._completeStage(task);
             }
         });

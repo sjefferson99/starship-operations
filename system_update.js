@@ -20,13 +20,25 @@ class SystemUpdate {
         this.CO2_DRAW_W_BY_TIER   = [21];
         this.GEN_OUTPUT_W    = 142;
         this.GEN_FUEL_L_HR   = 0.01;
+        // A drone charging from the battery (logistics.js) stops taking from it at this level.
+        this.DOCK_BATTERY_FLOOR_PCT = 20;
         this.TRANSCEIVER_DRAW_W      = 4;
         this.TRANSCEIVER_TRANSMIT_W  = 2;
         this.TRANSCEIVER_RANGE_LY_PER_W = 1;
         this.WATER_MAKER_DRAW_W  = 30;
         this.WATER_MAKER_L_HR    = 6;
         this.WATER_MAKER_ATMOSPHERE_POWER_FACTOR = 0.4; // condensing from air vs reclaiming waste
-        this.WATER_MAKER_RECLAIM_YIELD = 0.9; // share of processed black-water liquid that comes back as fresh water
+        // Solid waste holds liquid the water maker can't draw out: this many litres
+        // per litre of solids (blackWater.residueL). Moving the solids out frees it.
+        this.SOLIDS_HOLD_LIQUID_FRACTION = 0.2;
+        // Of the fresh water used (drinking, washing), how much ends up as black-water
+        // liquid. A closed ship is a closed loop; with the vents open about a tenth
+        // evaporates out of them.
+        this.BLACK_FROM_USE_VENTS_OPEN   = 0.9;
+        this.BLACK_FROM_USE_VENTS_CLOSED = 1.0;
+        // Cleaning up a spill takes fresh water — this much per litre spilled — and
+        // both the spill and the cleaning water go into the black water tank.
+        this.SPILL_CLEANUP_WATER_PER_L   = 0.5;
 
         // Water usage, per crew member per day.
         this.WATER_CONSERVATIVE_L_PER_CREW_DAY = 25;
@@ -76,6 +88,8 @@ class SystemUpdate {
         this.game.repairManager.decay(dt);
         this.game.repairManager.processQueue(dt);
         this.game.fabrication.update(dt);
+        this.game.logistics.update(dt);
+        this.game.commsNav.update(dt); // salvage coming in at the port
         this._updateStatuses();
 
         if (this._isGameOver()) {
@@ -271,16 +285,40 @@ class SystemUpdate {
         const ratedOutputW = this._moduleField('generator', power.tier, 'outputW', this.GEN_OUTPUT_W);
         const maxOutputW   = this._generatorMaxW();
         const genRunning   = power.active && !power.destroyed && fuel.current > 0;
+
+        // Drone docks charge from spare generator output only — whatever the
+        // generator can make beyond what the ship is drawing — never from the
+        // battery. They come before topping up the battery.
+        const dockW = genRunning
+            ? Math.min(Math.max(0, maxOutputW - totalDrawW), this.game.logistics.dockDemandW(dt))
+            : 0;
+
         let genOutputW = 0;
         if (genRunning) {
             if (power.target != null && power.level >= power.target) {
-                genOutputW = Math.min(totalDrawW, maxOutputW); // maintenance: exactly cover draw
+                genOutputW = Math.min(totalDrawW + dockW, maxOutputW); // maintenance: exactly cover draw
             } else {
                 genOutputW = maxOutputW; // below target: full (degraded) output
             }
         }
+        // A docked drone switched to "charge from battery" takes what spare
+        // generator output didn't cover from the battery instead — but never
+        // below DOCK_BATTERY_FLOOR_PCT, so charging can't flatten life support.
+        const hours = dt / 3600;
+        let batteryDockW = 0;
+        if (hours > 0) {
+            const unmetW   = Math.max(0, this.game.logistics.dockDemandW(dt) - dockW);
+            const wantW    = Math.min(unmetW, this.game.logistics.dockDemandW(dt, { fromBatteryOnly: true }));
+            const floorWh  = power.capacity * this.DOCK_BATTERY_FLOOR_PCT / 100;
+            const spareWh  = power.current + (genOutputW - totalDrawW - dockW) * hours - floorWh;
+            batteryDockW   = Math.max(0, Math.min(wantW, spareWh / hours));
+        }
+        const allDockW = dockW + batteryDockW;
+        if (allDockW > 0) this.game.logistics.chargeDocked(allDockW * hours);
+        power.dockW        = allDockW;
+        power.dockBatteryW = batteryDockW;
 
-        const netW = genOutputW - totalDrawW;
+        const netW = genOutputW - totalDrawW - allDockW;
         power.current = Math.max(0, Math.min(power.capacity, power.current + netW * dt / 3600));
         power.level   = (power.current / power.capacity) * 100;
 
@@ -379,11 +417,12 @@ class SystemUpdate {
         fresh.current        = Math.max(0, fresh.current - consumed);
         fresh.consumeRateLhr = consumeLhr;
 
-        // 90% of the fresh water actually drawn becomes black-water liquid (10%
-        // lost to drinking/showering/evaporation). Solid waste comes from the
-        // food eaten this tick (_updateFood), tracked separately for the
-        // dashboard split and because the water maker can only reclaim liquid.
-        const liquidProduced = consumed * 0.9;
+        // The fresh water drawn becomes black-water liquid — all of it with the
+        // vents closed, less what evaporates with them open (blackFromUseFraction).
+        // Solid waste comes from the food eaten this tick (_updateFood), tracked
+        // separately for the dashboard split and because the water maker can only
+        // reclaim liquid.
+        const liquidProduced = consumed * this.blackFromUseFraction();
         const solidProduced  = this._solidWasteL || 0;
         this._solidWasteL    = 0;
         const totalProduced  = liquidProduced + solidProduced;
@@ -392,6 +431,11 @@ class SystemUpdate {
 
         black.liquidL = black.liquidL + liquidProduced * overflowRatio;
         black.solidL  = black.solidL  + solidProduced  * overflowRatio;
+        // What the tank couldn't take is spilled in the cabin, not lost: it stays
+        // there (and the crew are exposed) until it's cleaned up (main.js cleanUpSpill).
+        black.spillLiquidL = (black.spillLiquidL || 0) + liquidProduced * (1 - overflowRatio);
+        black.spillSolidL  = (black.spillSolidL  || 0) + solidProduced  * (1 - overflowRatio);
+        this.settleResidue();
 
         this._runWaterMaker(hours);
 
@@ -402,26 +446,52 @@ class SystemUpdate {
         black.current = black.liquidL + black.solidL + (black.residueL || 0);
         black.level   = (black.current / black.capacity) * 100;
 
-        // A full tank has nowhere to put new waste — it backs up into the cabin.
-        // Exposure time drives CrewManager's sewage health effects and resets
-        // the moment the tank is relieved (dumped, or reclaimed by a water maker).
-        black.exposureHours = black.level >= this.BLACK_WATER_FULL_PCT ? (black.exposureHours || 0) + hours : 0;
+        // Waste spilled in the cabin exposes the crew until it's cleaned up.
+        // Exposure time drives CrewManager's sewage health effects.
+        black.exposureHours = this.spilledL() > 1e-9 ? (black.exposureHours || 0) + hours : 0;
 
-        // Net of what the water maker took back out this tick (less the residue
-        // it left behind), so the dashboard's fill rate goes negative when
-        // reclamation is winning.
-        black.liquidRateLhr = fresh.consumeRateLhr * 0.9;
+        // Net of what the water maker took back out this tick, so the dashboard's
+        // fill rate goes negative when reclamation is winning.
+        black.liquidRateLhr = fresh.consumeRateLhr * this.blackFromUseFraction();
         black.solidRateLhr  = this.game.systems.food?.solidRateLhr ?? 0;
-        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr
-                            - (black.reclaimRateLhr || 0) + (black.residueRateLhr || 0);
+        black.fillRateLhr   = black.liquidRateLhr + black.solidRateLhr - (black.reclaimRateLhr || 0);
+    }
+
+    // Share of fresh water used that becomes black-water liquid.
+    blackFromUseFraction() {
+        return this.game.ventsOpen && this.game.inBreathableAtmosphere
+            ? this.BLACK_FROM_USE_VENTS_OPEN : this.BLACK_FROM_USE_VENTS_CLOSED;
+    }
+
+    // Litres of waste spilled in the cabin, waiting to be cleaned up.
+    spilledL() {
+        const black = this.game.systems.blackWater;
+        return (black.spillLiquidL || 0) + (black.spillSolidL || 0);
+    }
+
+    // Free room in the black water tank.
+    blackRoomL() {
+        const black = this.game.systems.blackWater;
+        return Math.max(0, black.capacity - (black.liquidL + black.solidL + (black.residueL || 0)));
+    }
+
+    // Splits the tank's liquid into what's free (liquidL, which the water maker
+    // can reclaim) and what's soaked into the solid waste (residueL, which it
+    // can't): the solids hold up to SOLIDS_HOLD_LIQUID_FRACTION of their own
+    // volume. Run whenever liquid or solids change, so moving solids to a
+    // compost box hands the liquid they held back to the free liquid.
+    settleResidue() {
+        const black  = this.game.systems.blackWater;
+        const liquid = Math.max(0, (black.liquidL || 0) + (black.residueL || 0));
+        black.residueL = Math.min(liquid, Math.max(0, black.solidL || 0) * this.SOLIDS_HOLD_LIQUID_FRACTION);
+        black.liquidL  = liquid - black.residueL;
     }
 
     // Water maker: reclaims black-water liquid into fresh water first; while
     // parked in a breathable atmosphere it makes up any shortfall by condensing
     // moisture from outside air. In space, black-water liquid is its only source.
-    // Reclaiming isn't total: of each litre of liquid processed, only
-    // `reclaimYield` comes back as fresh water and the rest stays in the tank as
-    // residue nothing aboard can process — only a dump clears it.
+    // It can only reclaim the free liquid: what's soaked into the solids
+    // (residueL, see settleResidue) stays until the solids are moved out.
     _runWaterMaker(hours) {
         const wm    = this.game.systems.waterMaker;
         const fresh = this.game.systems.freshWater;
@@ -431,11 +501,8 @@ class SystemUpdate {
         wm.outputLhr = 0; wm.loadFraction = 0; wm.source = 'none';
         wm.fromBlackLhr = 0; wm.fromAirLhr = 0;
         black.reclaimRateLhr = 0;
-        black.residueRateLhr = 0;
         black.reclaimStarved = false; // true when the maker wanted more than the tank's liquid could give
         wm.ratedLhr  = this._moduleField('waterMaker', wm.tier, 'outputLhr', this.WATER_MAKER_L_HR) * (wm.count ?? 1);
-        wm.reclaimYield = Math.min(1, Math.max(0.01,
-            this._moduleField('waterMaker', wm.tier, 'reclaimYield', this.WATER_MAKER_RECLAIM_YIELD)));
         if (!this._isRunning(wm) || hours <= 0) return;
 
         const efficiency = this.game.repairManager.efficiencyFor('waterMaker');
@@ -445,20 +512,16 @@ class SystemUpdate {
         // Black water always goes first; outside air only makes up the rest.
         const roomL     = Math.max(0, fresh.capacity - fresh.current);
         const wantL     = Math.min(maxL, roomL);
-        const processL  = Math.min(wantL / wm.reclaimYield, black.liquidL);
-        const fromBlack = processL * wm.reclaimYield;
-        const residueL  = processL - fromBlack;
+        const fromBlack = Math.min(wantL, black.liquidL);
         const fromAir   = this.game.inBreathableAtmosphere ? Math.max(0, wantL - fromBlack) : 0;
         const madeL     = fromBlack + fromAir;
 
-        black.liquidL  -= processL;
-        black.residueL  = (black.residueL || 0) + residueL;
+        black.liquidL  -= fromBlack;
         fresh.current  += madeL;
 
         // Only the liquid can be reclaimed. If the maker had capacity to spare but
         // the liquid ran out, what's left in the tank is matter it can't touch.
-        black.reclaimRateLhr = processL / hours;
-        black.residueRateLhr = residueL / hours;
+        black.reclaimRateLhr = fromBlack / hours;
         black.reclaimStarved = fromBlack < wantL - 1e-9;
 
         // Condensing clean moisture from outside air is far less work than

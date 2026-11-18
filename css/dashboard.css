@@ -143,16 +143,19 @@
     flex-wrap: wrap;
     gap: 20px;
 }
-/* A group is as wide as its cards want, sharing a row with others where they fit. */
+/* Each group is a row of its own, its cards side by side across it, so
+   collapsing a group folds away exactly one row. */
 .card-group {
-    flex: var(--cards, 2) 1 calc(var(--cards, 2) * 280px + (var(--cards, 2) - 1) * 16px);
-    min-width: min(100%, 280px);
+    flex: 1 1 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
 }
 #group-life-support { --cards: 4; }
-#group-water { --cards: 3; }
+#group-water        { --cards: 3; }
+#group-stores       { --cards: 2; }
+#group-logistics    { --cards: 3; }
 .card-group-header {
     display: flex;
     align-items: center;
@@ -181,9 +184,13 @@
 }
 .card-group-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(var(--cards, 2), minmax(0, 1fr));
     gap: 16px;
     align-items: start;
+}
+/* Too narrow for a group's cards to share a row: let them wrap. */
+@media (max-width: 1000px) {
+    .card-group-cards { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 }
 
 /* ── System cards ── */
@@ -669,6 +676,38 @@
 .crew-impact-panel {
     margin-bottom: 4px;
 }
+/* Work Queue: options on the left, the queue on the right, each scrolling on its own. */
+.task-queue-card {
+    max-width: 1180px;
+    height: 85vh;
+    max-height: 85vh;
+}
+.task-queue-columns {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+}
+.task-queue-col {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-right: 6px;
+}
+.task-queue-col .overlay-list { overflow: visible; flex: 0 0 auto; }
+.task-queue-col-queue {
+    border-left: 1px solid rgba(0, 150, 255, 0.18);
+    padding-left: 24px;
+}
+@media (max-width: 800px) {
+    .task-queue-card { height: auto; }
+    .task-queue-columns { grid-template-columns: 1fr; overflow-y: auto; }
+    .task-queue-col { overflow: visible; }
+    .task-queue-col-queue { border-left: none; padding-left: 0; border-top: 1px solid rgba(0, 150, 255, 0.18); padding-top: 12px; }
+}
 .overlay-list {
     list-style: none;
     overflow-y: auto;
@@ -959,11 +998,17 @@
     align-items: center;
     gap: 22px;
     flex-wrap: wrap;
+    /* The left side gives way first, so a long location name wraps here
+       rather than pushing the stats and buttons onto a row of their own. */
+    flex: 1 1 0;
+    min-width: 0;
 }
+.header-top > .header-right { flex: 0 0 auto; }
 .header-location {
     display: flex;
     flex-direction: column;
     gap: 3px;
+    max-width: 260px; /* the detail line wraps, leaving room for the ship beside it */
     padding-right: 22px;
     border-right: 1px solid rgba(0, 150, 255, 0.25);
 }
@@ -1498,3 +1543,44 @@
 .timeline-bucket:hover circle { stroke: #e0f7fa; stroke-width: 2.5; }
 .timeline-bucket text { fill: #e0f7fa; font-size: 10px; font-weight: 600; text-anchor: middle; pointer-events: none; }
 .timeline-bucket-selected circle { stroke: #ffffff; stroke-width: 2.5; }
+
+/* ── Propulsion & Logistics cards (main.js _displayLogistics) ── */
+.logi-details { font-size: 0.78rem; color: #90a4ae; line-height: 1.45; display: flex; flex-direction: column; gap: 6px; }
+.logi-details p { margin: 0; }
+.logi-details strong { color: #e0f7fa; }
+.logi-controls { flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.logi-controls .market-blocker { flex: 1 1 100%; text-align: right; }
+.drone-list { list-style: none; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; }
+.drone-row {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.drone-title { font-size: 0.76rem; color: #e0f7fa; font-weight: 600; }
+.drone-meta  { font-size: 0.7rem; color: #78909c; }
+.drone-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.drone-actions .repair-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.logi-hold, .logi-docks { font-size: 0.72rem; color: #78909c; }
+.market-mode {
+    font-size: 0.76rem;
+    color: #b0bec5;
+    background: rgba(0, 188, 212, 0.08);
+    border-left: 3px solid rgba(0, 188, 212, 0.5);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin: 0 0 10px;
+}
+.market-mode strong { color: #e0f7fa; }
+
+/* ── Plan Run screen (main.js _renderDroneRunScreen) ── */
+.drone-run-weight { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.drone-run-weight-label { font-size: 0.85rem; color: #90a4ae; }
+.drone-run-weight-label strong { color: #e0f7fa; font-size: 1rem; }
+.drone-run-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.drone-run-footer + .market-blocker { text-align: right; margin-top: 6px; }
+#drone-run-screen .cargo-box-actions .repair-btn:disabled,
+.drone-run-footer .repair-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+#drone-run-screen .cargo-box-actions { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
