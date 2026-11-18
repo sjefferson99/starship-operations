@@ -68,7 +68,15 @@ class Tour {
                 title: 'Where you are',
                 target: '#header-location',
                 body: `<p>Your current location and what kind of place it is are always shown here.</p>
-                       <p>Right now you're parked on a <strong>planet</strong> with a breathable atmosphere — which gives you a free ride on life support, and is the only place you can buy parts.</p>`,
+                       <p>Right now you're at the back of <strong>Harlow's Salvage</strong>, a yard 120 km out from Port Carrow, on a planet with a breathable atmosphere — which gives you a free ride on life support.</p>
+                       <p>Everything bought and sold changes hands at the port. Nothing gets delivered out here, so until she can fly there herself, goods travel by <strong>transfer drone</strong>.</p>`,
+            },
+            {
+                title: 'Her drives are scrap',
+                target: '#group-logistics',
+                body: `<p>You knew when you bought her: the <strong>atmospheric thrusters</strong> and the <strong>ion drive</strong> are both wrecked. Not worth repairing — but worth <strong>stripping for parts</strong>, which gives you components to build with.</p>
+                       <p>Stripped parts go in a storage box. <strong>Storage Box 2 is empty — keep it that way for the parts.</strong> Don't start composting in it, or there'll be nowhere to put them.</p>
+                       <p>The plan: buy a drone and have it bring a water maker first, strip the drives, build a drone dock to charge it, then build new thrusters and fly her into the port.</p>`,
             },
             {
                 title: 'Open the vents',
@@ -90,7 +98,7 @@ class Tour {
                 title: 'Food',
                 target: '#card-food',
                 body: `<p>You have five days of <strong>food rations</strong> in a storage box. Each crew member eats three a day.</p>
-                       <p>When they run low, buy more on the planet's market — they need a storage box with room. Run out and nothing happens for three days, then hunger starts to wear the crew down.</p>
+                       <p>When they run low, buy more on the market — they need a storage box with room, and from the yard a drone has to fetch them. Run out and nothing happens for three days, then hunger starts to wear the crew down.</p>
                        <p><strong>Rationing</strong> halves each meal. The crew work a little slower while underfed, and after a week it starts to wear on their health — far gentler than going without.</p>
                        <p>What's eaten ends up as solid waste in the black water tank.</p>`,
             },
@@ -201,11 +209,11 @@ class Tour {
             },
             {
                 id: 'black-full',
-                title: 'Black water is overflowing',
+                title: 'Black water has spilled',
                 target: '#card-blackwater',
                 when: g => (g.systems.blackWater.exposureHours ?? 0) > 0,
-                body: `<p>The waste tank is full and backing up into the cabin. This hurts crew health <strong>immediately</strong>, the damage climbs every hour it's left, and so does the chance of a serious infection.</p>
-                       <p>Dump it now — the 100 credit fine is the cheap option.</p>`,
+                body: `<p>The waste tank was full, and what it couldn't take has spilled into the cabin. This hurts crew health <strong>immediately</strong>, the damage climbs every hour it's left, and so does the chance of a serious infection.</p>
+                       <p>Press <strong>Clean Up Spill</strong> on the Black Water card. The spill goes back into the tank, along with half as much again of fresh water used to clean it up, so the tank needs room for both. Make room by running the water maker or moving solids to a compost box; dumping the tank is the last resort.</p>`,
             },
             {
                 id: 'water-empty',
@@ -248,15 +256,86 @@ class Tour {
                 title: 'The local market is in range',
                 target: '#comms-nav-btn',
                 when: g => g.commsNav.hasLocalDetails() && g.systems.waterMaker.installed === false,
-                body: `<p>Click <strong>Open Comms &amp; Nav</strong> here on the Transceiver card and select your current location to see what's for sale. You can only buy while you're on the planet.</p>
-                       <p>You need a <strong>water maker</strong>. They're all salvage: 100–200 credits depending on condition. One below 20% is cheapest, but repairing it is a gamble that can destroy it.</p>`,
+                body: `<p>Click <strong>Open Comms &amp; Nav</strong> here on the Transceiver card and select your current location to see what's for sale.</p>
+                       <p>Buy a <strong>transfer drone</strong> first: from the yard, nothing you buy reaches the ship without one. It flies itself over, charged — but with only enough charge for <strong>one round trip</strong> until you build it a dock.</p>
+                       <p>So order its first load at the same time: a <strong>water maker</strong> (salvage, 100–200 credits by condition — one below 20% is cheapest, but repairing it is a gamble that can destroy it), one <strong>composting agent</strong> and a case of <strong>food</strong>. That's 35 kg — exactly one drone load.</p>`,
+            },
+            {
+                id: 'drone-arrived',
+                title: 'Your drone is here — plan its first run',
+                target: '#card-drone',
+                when: g => g.logistics.drones().some(d => g.logistics.isHome(d)) && !g.droneDocks && g.systems.waterMaker.installed === false,
+                body: `<p>It carries 35 kg a run to and from Port Carrow, about two and a half hours there and back. What you buy waits at the port until a run brings it: press <strong>Plan Run</strong> to choose what comes back, then <strong>Send to Port</strong>.</p>
+                       <p>Make this run count — it's the only one the drone has charge for until there's a dock. Plan the <strong>water maker</strong>, the <strong>composting agent</strong> and the <strong>food</strong>: a full 35 kg. If you haven't ordered them yet, do that first in Comms &amp; Nav.</p>`,
+            },
+            {
+                id: 'strip-drives',
+                title: 'Strip the drives for parts',
+                target: '#card-thrusters',
+                when: g => {
+                    const t = g.systems.thrusters;
+                    return t.installed !== false && t.destroyed && !g.droneDocks
+                        && !g.repairQueue.some(task => task.kind === 'strip')
+                        // While the first run is out, or once the water maker's repair is in hand — never ahead of it.
+                        && (g.logistics.drones().some(d => !g.logistics.isHome(d))
+                            || (g.systems.waterMaker.installed !== false && (queued(g, 'waterMaker') || pct(g.systems.waterMaker) >= 50)));
+                },
+                body: `<p>The wrecked atmospheric thrusters give up 2 precision and 3 basic components into the empty Storage Box 2 — everything the next two builds need. Press <strong>Strip for Parts</strong>; it takes 8 crew-hours in the Work Queue, so put it <strong>after</strong> the water maker's repair.</p>`,
+            },
+            {
+                id: 'drives-stripped',
+                title: 'A compost box and a drone dock',
+                target: '#repair-queue-btn',
+                when: g => g.fabrication.count('precisionComponents') >= 1 && !g.droneDocks && !g.repairQueue.some(t => t.recipeKey === 'droneDock'),
+                body: `<p>The stripped parts make two things in the Work Queue. A <strong>Storage Box</strong> (1 basic component) — dose it with the composting agent and it takes the solid waste the water maker can't. And a <strong>Drone Dock</strong> (1 precision + 2 basic) — dock the drone on it from the Transfer Drones card.</p>
+                       <p>A dock only charges from <strong>spare generator power</strong>: whatever the generator can make beyond what the ship is using. Until the generator is repaired, there's none.</p>
+                       <p>Normally you shouldn't charge from the ship's battery — the systems keeping the crew alive need it. But this early on the ship draws very little, and getting the drone flying again matters more, so this is the exception: switch on the drone's <strong>charge from battery</strong> override. It never takes the battery below 20%. Switch it off again once the generator is running.</p>`,
+            },
+            {
+                id: 'drone-low',
+                title: 'The drone needs charging',
+                target: '#card-drone',
+                when: g => g.logistics.drones().some(d => g.logistics.isHome(d) && (d.chargeWh ?? 0) < g.logistics.roundTripWh()),
+                body: `<p>A drone won't set out without charge for the whole round trip, and it can only charge on a <strong>drone dock</strong> — build one from stripped parts if you haven't. A dock fills it from spare generator power, so it charges faster the more the generator can spare. With no generator running yet, use the drone's <strong>charge from battery</strong> override, and switch it off once the generator is up.</p>`,
+            },
+            {
+                id: 'settled',
+                title: 'Breathing room',
+                target: null,
+                when: g => g.droneDocks > 0 && g.systems.waterMaker.active && !g.systems.waterMaker.destroyed
+                    && g.fabrication.boxes().some(b => b.kind === 'compost'),
+                body: `<p>Water is being made, black water is being reclaimed, solid waste has a compost box and the drone can recharge. The ship can look after itself for a while.</p>
+                       <p>Now's the time to fix things up properly: finish repairs, keep an eye on food, and start trading — compost and repaired salvage sell at the port — towards new thrusters.</p>`,
+            },
+            {
+                id: 'thrusters-plan',
+                title: 'New thrusters',
+                target: '#card-thrusters',
+                when: g => g.droneDocks > 0 && g.systems.thrusters.installed === false && !g.repairQueue.some(t => t.recipeKey === 'thrusters'),
+                body: `<p>New atmospheric thrusters take 10 precision and 12 basic components and three days in the Work Queue. Precision components cost 150 credits at the port, so you'll need to trade first — repair salvage and sell it, sell compost.</p>
+                       <p>The hop to Port Carrow burns 20 L of fuel. Fuel isn't cheap and a drone carries 35 L a run, so get some in before you go. At the port everything comes straight aboard.</p>`,
+            },
+            {
+                id: 'thrusters-ready',
+                title: 'She can fly',
+                target: '#card-thrusters',
+                when: g => g.systems.thrusters.installed !== false && !g.systems.thrusters.destroyed && !g.logistics.atPort() && !g.logistics.isFlying(),
+                body: `<p>The thrusters are fitted. With 20 L of fuel aboard and the drone stowed or docked, <strong>Fly to Port Carrow</strong>.</p>`,
+            },
+            {
+                id: 'at-port',
+                title: 'Port Carrow',
+                target: '#header-location',
+                when: g => g.logistics.atPort(),
+                body: `<p>Berthed at the port: what you buy comes straight aboard and what you sell is paid for on the spot. Anything still waiting in the port hold is loaded now.</p>`,
             },
             {
                 id: 'watermaker-bought',
                 title: 'Water maker fitted',
                 target: '#card-watermaker',
                 when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) < 50 && !queued(g, 'waterMaker'); },
-                body: `<p>It's aboard, in the state you bought it. Queue its repair from this card — and check the Work Queue order, since it will wait behind anything above it.</p>`,
+                body: `<p>It's aboard, in the state you bought it. Queue its repair from this card and move it to the <strong>top of the Work Queue</strong>: until it runs, nothing is emptying the black water tank.</p>
+                       <p>Once it's reclaiming, the tank stays under control while you strip the drives and build a compost box and a drone dock.</p>`,
             },
             {
                 id: 'watermaker-ready',
@@ -264,7 +343,7 @@ class Tour {
                 target: '#card-watermaker',
                 when: g => { const w = g.systems.waterMaker; return w.installed && !w.destroyed && pct(w) >= 50 && !w.active && !queued(g, 'waterMaker'); },
                 body: `<p>Switch it on. It reclaims black water into fresh water — which also keeps the waste tank down — and on a planet it tops up from the outside air. Black water always goes first; the card shows the split.</p>
-                       <p>It's the hungriest thing aboard — 30 W while reclaiming waste, less while condensing from air — so without the generator running it will flatten the battery in a few hours. You can come off rationing once the tank can cover it: after a day on short rations that takes a one-off 50 L per person to rehydrate, so the button stays greyed out until there's that much in the tank.</p>`,
+                       <p>It's the hungriest thing aboard — 30 W while reclaiming waste, less while condensing from air — so without the generator running it will flatten the battery in a few hours. You can come off rationing once the tank can cover it: after a day on short rations that takes a one-off 50 L per person to rehydrate, and it all ends up in the black water tank, so the button stays greyed out until there's that much fresh water and room in the black water tank for it.</p>`,
             },
             {
                 id: 'generator-fixed',
@@ -296,15 +375,16 @@ class Tour {
                 title: 'Solid waste has nowhere to go',
                 target: '#cargo-btn',
                 when: g => g.systems.blackWater.solidL >= 20 && !g.fabrication.boxes().some(b => b.kind === 'compost'),
-                body: `<p>Everything the crew eat ends up as solid waste in the black water tank, and the water maker can't touch it, so it only builds up. Instead of dumping it, you can compost it and sell it.</p>
-                       <p>You need a storage box of its own — your food is in the one you have. Buy <strong>basic components</strong> and <strong>composting agent</strong> on the market, fabricate a storage box from the Work Queue, dose it with the agent, then move solids into it from the Black Water card.</p>`,
+                body: `<p>Everything the crew eat ends up as solid waste in the black water tank, and the water maker can't touch it, so it only builds up. Compost it instead, and sell it.</p>
+                       <p>You need a storage box of its own — your food is in one, and keep Storage Box 2 for stripped parts. Fabricate a storage box in the Work Queue (one basic component — stripping the drives gives you some), dose it with <strong>composting agent</strong>, then move solids into it from the Black Water card.</p>`,
             },
             {
                 id: 'compost-ready',
                 title: 'Compost is ready',
                 target: '#cargo-btn',
                 when: g => g.fabrication.boxes().some(b => g.fabrication.boxStatus(b) === 'ready'),
-                body: `<p>A storage box has finished composting. Sell it from the <strong>Cargo Hold</strong>, or the market in Comms &amp; Nav, while you're on a planet with the local network in range — the box is then empty and ready to use again.</p>`,
+                body: `<p>A storage box has finished composting. Sell it from the <strong>Cargo Hold</strong>, or the market in Comms &amp; Nav, with the local network in range — the box is then empty and ready to use again.</p>
+                       <p>From the yard it goes by drone, 35 L a run, and is paid for when the drone lands at the port.</p>`,
             },
             {
                 id: 'machine-box',
@@ -312,7 +392,7 @@ class Tour {
                 target: '#cargo-btn',
                 when: g => g.fabrication.machineBoxes().some(b => !b.module),
                 body: `<p>A machine box holds one module — switched off, not wearing, and without needing a slot on the dashboard.</p>
-                       <p>Use <strong>Buy &amp; Store</strong> on the market to put a salvaged module in it. Keep it as a spare and swap it in from the <strong>Cargo Hold</strong>, or repair it in the Work Queue and sell it: a fully repaired module fetches up to 400 credits, far more than the salvage costs. Each sale floods the market a little, so the next of the same kind fetches less for a while.</p>`,
+                       <p>Use <strong>Buy &amp; Store</strong> on the market to put a salvaged module in it. Keep it as a spare and swap it in from the <strong>Cargo Hold</strong>, or repair it in the Work Queue and sell it: a fully repaired module fetches up to 750 credits, several times what the salvage costs — a damaged one fetches little, so the repair is where the money is. Each sale floods the market a little, so the next of the same kind fetches a bit less for a few days.</p>`,
             },
             {
                 id: 'gamble',
@@ -374,7 +454,7 @@ class Tour {
                 title: 'Rationing is taking its toll',
                 target: '#card-freshwater',
                 when: g => { const f = g.systems.freshWater; return f.rationing && (f.rationHours ?? 0) >= g.crewManager.WATER_RATION_GRACE_HOURS; },
-                body: `<p>After a day on short rations your health has started to slip. Coming off rationing now costs a one-off 50 L per person to rehydrate — until the tank holds that much, the button stays greyed out and the card shows how far short you are.</p>
+                body: `<p>After a day on short rations your health has started to slip. Coming off rationing now costs a one-off 50 L per person to rehydrate — until the tank holds that much, and the black water tank has room for it once it's used, the button stays greyed out and the card shows how far short you are.</p>
                        <p>So the way out is a working water maker, not the switch.</p>`,
             },
             {
@@ -383,7 +463,7 @@ class Tour {
                 target: '#card-blackwater',
                 when: g => g.systems.blackWater.level >= 70,
                 body: `<p>Used water ends up here. If the tank fills completely it overflows into the cabin and makes the crew ill.</p>
-                       <p><strong>Dump to Space</strong> empties it, but every dump is detected and fined 100 credits. A running water maker reclaims most of the liquid instead — about a tenth stays behind as residue, and the solid matter isn't touched, so both slowly build up until the tank is dumped.</p>`,
+                       <p>A running water maker reclaims the liquid, but there's a limit to how much it can recover: it can't touch the solid matter, or the liquid soaked into it, so the tank still slowly fills. Move the solids to a compost box — the liquid they held is then freed for the water maker to reclaim.</p>`,
             },
             {
                 id: 'space-low',

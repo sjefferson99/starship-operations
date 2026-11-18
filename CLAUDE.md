@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a vanilla-JS browser dashboard game with **zero build tooling**: no bundler, no
 framework, no `import`/`export`. Every client file is a plain global `class` loaded via a
 classic `<script>` tag in `index.html`, in this order: `rng.js` → `game_state.js` → `system_update.js` →
-`repair_manager.js` → `fabrication.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `notifications.js` → `anchor.js` → `main.js` → `sound.js`. That order is load-bearing —
+`repair_manager.js` → `fabrication.js` → `logistics.js` → `crew_manager.js` → `comms_nav.js` → `tour.js` → `timeline.js` → `notifications.js` → `anchor.js` → `main.js` → `sound.js`. That order is load-bearing —
 later classes reference earlier ones by bare global name (e.g. `new SystemUpdate(this)` inside
 `StarshipGame`'s constructor).
 
@@ -61,13 +61,14 @@ module from repair, decay, power demand and ship capacity. The **transceiver**'s
 contacts once range covers their distance. Visibility is derived live, never remembered, so an
 unpowered or switched-off transceiver shows nothing but the ship's own position. The **market**
 (`game.market`, seeded alongside the sector in `CommsNav.generate`) is a list of salvaged modules;
-`CommsNav.purchaseBlocker()`/`purchase()` hold every buying rule (on-planet only, local network in
-range, enough credits, and either a module slot that is empty or destroyed — `dest: 'fit'` — or an
-empty machine storage box — `dest: 'store'`). The **water maker** reclaims
+`CommsNav.purchaseBlocker()`/`purchase()` hold every buying rule (local network in range, not in
+flight, enough credits, and either a module slot that is empty or destroyed — `dest: 'fit'` — or an
+empty machine storage box — `dest: 'store'`); where the goods then go is logistics (below). The **water maker** reclaims
 black-water liquid into fresh water first and, in a breathable atmosphere, makes up the rest from
-outside air (the card shows the split, `fromBlackLhr`/`fromAirLhr`). Only `reclaimYield` (module spec,
-0.9) of the liquid processed comes back; the rest stays in the tank as `blackWater.residueL`, which
-counts toward the tank and only a dump clears. Dumping always empties the whole tank — there's no prompt.
+outside air (the card shows the split, `fromBlackLhr`/`fromAirLhr`). It reclaims all of the *free* liquid, but
+the solids hold `SOLIDS_HOLD_LIQUID_FRACTION` (0.2) of their volume as `blackWater.residueL`, which it can't
+touch; `SystemUpdate.settleResidue()` re-splits liquid/residue whenever liquid or solids change (each tick,
+`syncBlackWaterLevel`, restore), so moving solids to a compost box frees the liquid they held. Dumping always empties the whole tank — there's no prompt.
 
 **Saves are named slots, not one implicit save.** New Game always starts from pure
 `_defaultSystems()` defaults (never resumes from a prior save) and prompts for a name via a
@@ -110,19 +111,60 @@ stage until `task.targetPct` is reached. `task.band`/`totalHours`/`hoursRemainin
 stage currently being worked, not the whole job (`remainingHours(task)` gives that). The target is
 chosen with the "Repair to" chips (card, Available Repairs, or on a queued task) and defaults to 100.
 
-**Fabrication and cargo live in `fabrication.js`** (`Fabrication`). `game.cargo` holds supplies
-aboard (`items`: `basicComponents`, `compostingAgent`, bought on any planet you can trade at — unlimited
-stock, defined in `Fabrication.ITEMS`) and storage boxes (`boxes`). The repair queue is the ship's
-**work queue**: fabrication jobs are tasks in `game.repairQueue` with `kind: 'fabricate'` and a
-`recipeKey` (no `systemKey`), worked by the same engineers in the same order; components are taken when
-the job is queued and refunded on cancel, and `RepairManager.processQueue` calls
-`Fabrication.completeTask` when the hours are done. Anything reading `repairQueue` must allow for tasks
-without a `systemKey`. A box holds one kind of thing at a time: composting agent makes an empty box a
-compost box, solid waste (`blackWater.solidL`) is moved into it instantly, sealing (by hand or once full)
-starts `COMPOST_HOURS` of composting, and finished compost sells on a planet, which empties the box.
-Boxes, supplies and boxes being made count toward `_computeShipCapacity()`, and buying or fabricating is
-refused when it wouldn't fit (`Fabrication.spaceBlocker`). Persisted in `ship_cargo_items` and
-`storage_boxes`; `repair_tasks` gained `kind`/`recipe_key`.
+**Fabrication and cargo live in `fabrication.js`** (`Fabrication`). `game.cargo.boxes` holds storage
+boxes, and **everything aboard bar a drone is in a box**: supplies (`Fabrication.ITEMS`: basic and
+precision components, composting agent — unlimited stock) live in `kind: 'parts'` boxes as
+`box.parts = { itemKey: count }`, each unit taking `ITEMS[k].litres` of the box; `count()`,
+`storeParts()` (fullest parts box first, then empty boxes; `force` for refunds and strip yields) and
+`takeParts()` are the only way in and out. `cargo.items` is legacy: `GameState._applyCargo` packs an old
+payload's loose items into boxes. The repair queue is the ship's **work queue**: fabrication jobs are
+tasks in `game.repairQueue` with `kind: 'fabricate'` and a `recipeKey` (no `systemKey`), and stripping
+a wrecked drive is `kind: 'strip'` (`recipeKey` = the drive) — `RepairManager.isJob(task)` covers both.
+They're worked by the same engineers in the same order; a recipe's `components` (a map of item → count)
+are taken when the job is queued and refunded on cancel, and `RepairManager.processQueue` calls
+`Fabrication.completeTask` when the hours are done. A recipe `makes` a box, a drone dock, or a fitted
+module (the atmospheric thrusters). Anything reading `repairQueue` must allow for tasks without a
+`systemKey`. A box holds one kind of thing at a time: composting agent makes an empty box a compost box,
+solid waste (`blackWater.solidL`) is moved into it instantly, sealing (by hand or once full) starts
+`COMPOST_HOURS` of composting, finished compost sells, which empties the box, or can be
+tipped out for free instead (only once it's finished). Boxes and what's being made count toward `_computeShipCapacity()`, and
+buying or fabricating is refused when it wouldn't fit (`Fabrication.spaceBlocker`). Persisted in
+`storage_boxes` (a parts box's contents are JSON in `contents`); `repair_tasks` gained `kind`/`recipe_key`.
+
+**Logistics (`logistics.js`, `Logistics`): the yard, the port, drones and drives.** A new ship is berthed
+at Harlow's Salvage (`game.berth = 'yard'`), 120 km from Port Carrow, with both drives — `systems.thrusters`
+and `systems.ionDrive`, `ship_modules` rows but not in `repairableKeys()` — wrecked, and an empty second
+storage box for their parts. All trade happens at the port: `Logistics.tradeMode()` is `'direct'` when
+berthed there, `'drone'` from the yard, `null` in flight or with the local network out of range, and every
+buy/sell blocker in `Fabrication`/`CommsNav` goes through it. From the yard a purchase is an order in
+`game.portHold` (same kind of thing merged into one line) and a sale is loaded onto a ready drone
+(`sendForSale`, paid when it lands); `orderBlocker` refuses anything over a drone's `payloadKg` and anything
+at all before a drone is owned. **Transfer drones** (`game.drones`, spec `transferDrone`) are bought from the
+market and fly themselves over; `state` is arriving/outbound/returning (away) or parked/stowed/docked (home).
+Each drone has a **plan** (`drone.plan = [{ holdId, qty }]`, the Plan Run screen) of what to bring back:
+`planAdd` refuses anything over `payloadKg`, more than is waiting (counting other drones' plans), or more than
+there's room aboard for (`roomAboardFor`: box litres, food room, tank room, empty machine boxes — net of every
+plan and every drone's `cargoIn`) — so from the yard a module can be ordered to store (`dest: 'store'`) with no
+machine box free, or none built yet: it waits in the hold until there's a box to plan it into. A drone's
+**outbound** plan (`drone.planOut = [{ kind: 'module' | 'compost', boxId }]`, top of Plan Run) is what the run
+takes out to sell; `launch` loads it out of its boxes (`_loadOut`), and a module going out counts as a free
+machine box for that drone's inbound plan (`roomAboardFor(entry, drone)`), which is how a stored module is
+swapped for another in one run. The port takes in new drone-sized salvage at `CommsNav.RESTOCK_HOURS`, up to
+`RESTOCK[].max` of each kind (`CommsNav.update`, found from `gameTime`, rolls on `game.rng`), and
+`_tidyPlans` keeps plans in step with the hold. A run (`launch`) needs charge for the round trip and a plan
+(or, from `sendForSale`, something to sell), and spends charge and wear per km; at the port it sells `cargoOut`,
+puts any undelivered `cargoIn` back in the hold, loads exactly the plan (splitting a part-planned order), and on
+return `_deliver` puts what fits aboard — the rest stays in `cargoIn` and is retried each tick. One huge
+tick can run a whole trip (`_updateDrone` loops through the legs). Drones are repair units
+`drone:<id>` (`RepairManager.isDroneUnit`), repairable only while home. **Drone docks** (`game.droneDocks`,
+fabricated) charge docked drones from spare generator output only, before the battery tops up, never from
+the battery — unless that drone's **charge from battery** switch (`chargeFromBattery`) is on, when the shortfall comes from the battery down to `DOCK_BATTERY_FLOOR_PCT` (20%). Computed in `SystemUpdate._updatePowerAndFuel` (`power.dockW`, of which `dockBatteryW` from the battery). **Stripping** a wrecked drive
+(`queueStrip`, needs box room for its `STRIP` yield) removes it and yields components; new atmospheric
+thrusters are a recipe. `fly(to)` needs fitted thrusters, `hopFuelL`, and every drone aboard;
+`game.flight` counts down and lands her (`_updateFlight`); at the port the hold is delivered straight
+aboard each tick. `main.js _syncBackground` sets the background from the berth (city / port / flight, the
+last animated). Persisted in `ship_logistics`, `drones` (loads as JSON) and `port_hold`; a payload
+without logistics starts at the yard with the drives wrecked.
 
 **Food is a box kind, and the only source of solid waste.** Rations are
 bought by the case (`Fabrication.FOOD`, not in `ITEMS`) and stored as `kind: 'food'` boxes, `fillL`
@@ -137,20 +179,20 @@ reset it): crew work `FOOD_RATION_WORK_FACTOR` slower while it's above 0, and he
 unassigned) and turns what was eaten into `blackWater.solidL` (`SOLID_WASTE_L_PER_RATION`); water
 use now only makes the liquid. `systems.food` holds the derived reading plus `starvedHours`, which
 drives `CrewManager`'s starvation impact after `FOOD_GRACE_HOURS` (all persisted in `ship_food`). A new
-ship starts with one box of `STARTER_RATIONS`, and so does a payload from before food existed
+ship starts with one box of `STARTER_RATIONS` (and one empty box), and so does a payload from before food existed
 (`GameState._hasFoodState`).
 
-**Machine storage boxes** (`size: 'machine'`, the `machineBox` recipe: 2 components, 10 h) each hold
+**Machine storage boxes** (`size: 'machine'`, the `machineBox` recipe: 2 basic components, 10 h) each hold
 one `module` record (`moduleKey`, `tier`, `repairPct`, `juryRigged`, `destroyed`) that needs no
 dashboard slot and doesn't wear. RepairManager treats it as the **unit key** `box:<boxId>`: repair
 tasks for it carry that as their `systemKey`, so code that looks for a fitted module's tasks by key
 never matches them (`repairManager.isStoredUnit()`, `storedKeys()`). `Fabrication.swap` exchanges it
 with the fitted unit (queued repairs follow their unit; `swapCount` lets the observers tell a swap
-from a repair) and `sellModule` sells it on a planet for `moduleSaleValue` (40–400 by condition,
+from a repair) and `sellModule` sells it for `moduleSaleValue` (40–750 by condition on a curve, `MODULE_SELL_CURVE`, so damaged units fetch little and repaired ones a lot;
 less if jury-rigged, scrap if destroyed) — the buy-salvage, repair, sell loop. Each sale adds to
 `game.moduleResale[moduleKey]`, which cuts the next sale of that type by `MODULE_RESALE_DROP` per
 recent sale and wears off over `MODULE_RESALE_RECOVERY_DAYS` (persisted in `market_resale`). The
-market itself never restocks: a bought listing is gone. Scarcity dials are `CommsNav.MARKET_STOCK`
+market only restocks drone-sized salvage (`CommsNav.RESTOCK`, see Logistics); anything else bought is gone. Scarcity dials are `CommsNav.MARKET_STOCK`
 counts and the price/condition ranges beside it; repair time is `repairStages` in `module_specs.json`.
 
 **Crew health lives in `crew_manager.js`** (`CrewManager`), separate from `data/crew_manifest.json`
@@ -168,9 +210,14 @@ is per member, from scheduled hours per day (`dutyHours`, overlaps counted once)
 slower work to 12h (`fatigueWorkFactor`); all fatigue works from `restedDutyHours`, which follows the
 scheduled hours with a ~6h time constant (persisted per member), so a roster change settles in over about
 a day rather than at once, and beyond that health is pulled down to a ceiling
-(`fatigueHealthCap`) that falls non-linearly to 0 at 24h; and **sewage exposure** while the black
-water tank is full (`blackWater.exposureHours`), an immediate drain that steepens hourly plus a
-rising per-hour chance of a lump-damage infection. Dumping the tank resets exposure and costs a
+(`fatigueHealthCap`) that falls non-linearly to 0 at 24h; and **sewage exposure** while black
+water is spilled in the cabin (`blackWater.exposureHours`), an immediate drain that steepens hourly plus a
+rising per-hour chance of a lump-damage infection. Water is a closed loop: all fresh water used (and the
+rehydration draw on coming off rationing, which needs that much room in the tank) becomes black-water
+liquid, 90% with the vents open (`blackFromUseFraction`). What a full tank can't take is kept as
+`spillLiquidL`/`spillSolidL`, never lost; only `cleanUpSpill` (main.js) ends exposure — it puts the spill
+back in the tank plus `SPILL_CLEANUP_WATER_PER_L` (0.5) of fresh water per litre, as much as tank room
+and fresh water allow. Dumping empties the tank (not the spill) and costs a
 flat fine (`BLACK_WATER_DUMP_FINE` in `main.js`), which may take credits negative. `this.crew` (the headcount driving O2/CO2
 consumption) is just `crewManager.aliveCount()`, re-synced once per tick.
 
@@ -214,7 +261,8 @@ real action, the tour never changes gameplay state itself — or shows a Next bu
 Playwright `page` fixture in `tests/helpers.js` pre-sets the seen flag (and switches tips off) so the
 card never covers controls other specs click; `tests/tour.spec.js` clears them again. Specs about
 Comms & Nav call `bringCommsOnline(page)` from the same helpers, since a new ship's transceiver
-reaches nothing.
+reaches nothing, and specs about buying or selling call `atPort(page)`, since from the yard every
+trade goes by drone (`tests/logistics.spec.js` covers that).
 
 **Sound (`sound.js`, `SoundManager`) is an observer and the one exception to the load order:** it
 loads *after* `main.js`, creates itself (`window.sound`) once `window.game` exists, and nothing in the

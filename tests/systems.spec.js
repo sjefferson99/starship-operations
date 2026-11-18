@@ -3,7 +3,7 @@
 // maker, shift fatigue, and black-water overflow / dump fines. Like the other
 // specs, drives real game logic through window.game rather than re-implementing it.
 const { expect } = require('@playwright/test');
-const { test, startNewGame, bringCommsOnline } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline, atPort } = require('./helpers.js');
 
 // Freezes the 1-second game timer so only the ticks a test runs explicitly happen.
 const freeze = page => page.evaluate(() => window.game._stopTimer());
@@ -152,10 +152,11 @@ test.describe('market and water maker', () => {
         expect(again).toEqual(makers);
     });
 
-    test('buying a water maker fits it in its sold condition and charges the price', async ({ page }) => {
+    test('buying a water maker at the port fits it in its sold condition and charges the price', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
         await bringCommsOnline(page);
+        await atPort(page);
 
         await expect(page.locator('#watermaker-missing')).toBeVisible();
         await page.click('#comms-nav-btn');
@@ -185,6 +186,7 @@ test.describe('market and water maker', () => {
     test('the market list keeps its scroll position while the game ticks, and across a purchase', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page);
         await page.click('#comms-nav-btn');
 
         const services = page.locator('.comms-details-services');
@@ -203,6 +205,7 @@ test.describe('market and water maker', () => {
         await startNewGame(page);
         await freeze(page);
         await bringCommsOnline(page);
+        await atPort(page);
 
         const result = await page.evaluate(() => {
             const g = window.game;
@@ -232,7 +235,7 @@ test.describe('market and water maker', () => {
             g.credits = listing.price - 1;
             return { offline, broke: g.commsNav.purchaseBlocker(listing), bought: g.commsNav.purchase(listing.id) };
         });
-        expect(result.offline).toContain('on the planet');
+        expect(result.offline).toContain('out of range');
         expect(result.broke).toBe('Not enough credits');
         expect(result.bought).toBe(false);
     });
@@ -266,16 +269,16 @@ test.describe('market and water maker', () => {
         expect(result.powered.source).toBe('blackWater');
         expect(result.powered.gained).toBeCloseTo(6 - 100 / 24, 5);
         expect(result.powered.split).toBe('100%');
-        // 6 L of fresh water at a 90% yield takes 6.667 L of liquid out of the tank and
-        // leaves 0.667 L behind as residue: 20 L + this hour's 3.75 L − 6.667 L.
-        expect(result.powered.blackLiquid).toBeCloseTo(20 + (100 / 24) * 0.9 - 6 / 0.9, 5);
-        expect(result.powered.residue).toBeCloseTo(6 / 0.9 - 6, 5);
+        // Every litre of free liquid it processes comes back: 20 L + this hour's 4.167 L of use
+        // (all of it, with the vents closed) − 6 L. With no solids, none of the liquid is held back.
+        expect(result.powered.blackLiquid).toBeCloseTo(20 + 100 / 24 - 6, 5);
+        expect(result.powered.residue).toBeCloseTo(0, 5);
         expect(result.powered.draw).toBeCloseTo(30, 5);
-        // The dashboard's fill rate is net of reclamation: 3.75 L/hr of liquid waste plus the
+        // The dashboard's fill rate is net of reclamation: 4.167 L/hr of liquid waste plus the
         // solids from three rations a day (1.5 L each), − the 6 L/hr that left as fresh water.
-        expect(result.powered.fill).toBeCloseTo((100 / 24) * 0.9 + 4.5 / 24 - 6, 5);
+        expect(result.powered.fill).toBeCloseTo(100 / 24 + 4.5 / 24 - 6, 5);
         expect(result.powered.shown).toBe(`−${(-result.powered.fill).toFixed(3)} L/hr`);
-        expect(result.powered.reclaimShown).toBe(`−${(6 / 0.9).toFixed(3)} L/hr`);
+        expect(result.powered.reclaimShown).toBe('−6.000 L/hr');
         expect(result.unpowered).toBe(0);
     });
 
@@ -288,7 +291,7 @@ test.describe('market and water maker', () => {
             const wm = g.systems.waterMaker, black = g.systems.blackWater;
             Object.assign(wm, { installed: true, repairPct: 100, active: true });
             g.systems.power.current = 800;
-            black.liquidL = 0; black.solidL = 12;
+            black.liquidL = 0; black.solidL = 10;
 
             g.systemUpdate.update(3600);
             g.updateDisplay();
@@ -300,21 +303,32 @@ test.describe('market and water maker', () => {
             };
         });
 
-        // Still makes its full 6 L/hr: all 3.75 L of this hour's liquid waste is processed,
-        // giving 3.375 L at the 90% yield (0.375 L stays as residue), and the air makes up the rest.
+        // Still makes its full 6 L/hr. Of this hour's 4.167 L of liquid waste, 2 L soaks into
+        // the 10 L of solids (20% of their volume) and can't be drawn out; the free 2.167 L is
+        // all reclaimed, and the air makes up the rest.
         expect(result.out).toBeCloseTo(6, 5);
-        expect(result.reclaim).toBeCloseTo(3.75, 5);
-        expect(result.residue).toBeCloseTo(0.375, 5);
+        expect(result.reclaim).toBeCloseTo(100 / 24 - 2, 5);
+        expect(result.residue).toBeCloseTo(2, 5);
         expect(result.liquid).toBeCloseTo(0, 5);
-        expect(result.solid).toBeCloseTo(12, 5); // untouched (and no meal fell in this hour)
-        expect([result.blackPct, result.airPct]).toEqual(['56%', '44%']);
-        // Reclaimed share at full power, condensed share at 40%: (3.375 + 2.625 × 0.4) / 6 × 30 W.
-        expect(result.draw).toBeCloseTo(22.125, 5);
+        expect(result.solid).toBeCloseTo(10, 5); // untouched (and no meal fell in this hour)
+        expect([result.blackPct, result.airPct]).toEqual(['36%', '64%']);
+        // Reclaimed share at full power, condensed share at 40%: (2.167 + 3.833 × 0.4) / 6 × 30 W.
+        expect(result.draw).toBeCloseTo(((100 / 24 - 2) + (6 - (100 / 24 - 2)) * 0.4) / 6 * 30, 5);
 
         const note = page.locator('#blackwater-solids-note');
         await expect(note).toBeVisible();
-        await expect(note).toContainText('All the reclaimable liquid has been reclaimed');
-        await expect(note).toContainText('12.4 L is solid matter and residue');
+        await expect(note).toContainText('All the free liquid has been reclaimed');
+        await expect(note).toContainText('12.0 L is solid matter and the liquid soaked into it');
+
+        // Moving the solids out frees the liquid they held, ready to be reclaimed.
+        const freed = await page.evaluate(() => {
+            const g = window.game, b = g.systems.blackWater;
+            b.solidL = 0; g.syncBlackWaterLevel();
+            return { liquid: b.liquidL, residue: b.residueL, current: b.current };
+        });
+        expect(freed.liquid).toBeCloseTo(2, 5);
+        expect(freed.residue).toBe(0);
+        expect(freed.current).toBeCloseTo(2, 5);
 
         // Nothing but air to work with (no crew use, no liquid): the whole output is the cheap kind.
         const airOnly = await page.evaluate(() => {
@@ -399,8 +413,19 @@ test.describe('coming off water rationing', () => {
         await expect(page.locator('#freshwater-reset')).toContainText('L short');
         expect(await btn.evaluate(el => getComputedStyle(el).cursor)).toBe('not-allowed'); // visibly unavailable
 
-        // Tank topped up past the cost: available again, and using it draws the 50 L.
-        const before = await page.evaluate(() => { const g = window.game; g.systems.freshWater.current = 120; g.updateDisplay(); return 120; });
+        // Tank topped up past the cost — but the black water tank has no room for it once used.
+        const before = await page.evaluate(() => {
+            const g = window.game, b = g.systems.blackWater;
+            g.systems.freshWater.current = 120;
+            b.liquidL = 90; b.solidL = 0; b.residueL = 0; g.syncBlackWaterLevel();
+            g.updateDisplay();
+            return 120;
+        });
+        await expect(btn).toBeDisabled();
+        // Vents open: 90% of the 50 L ends up as black water.
+        await expect(page.locator('#freshwater-reset')).toContainText('needs 45 L free in the black water tank');
+        // Room made: available again, and using it draws the 50 L.
+        await page.evaluate(() => { const g = window.game, b = g.systems.blackWater; b.liquidL = 10; g.syncBlackWaterLevel(); g.updateDisplay(); });
         await expect(btn).toBeEnabled();
         await expect(page.locator('#freshwater-reset')).toHaveText('uses 50 L to rehydrate');
         // The run-dry estimate counts what's left after that 50 L draw: 70 L at 4.167 L/hr.
@@ -417,9 +442,12 @@ test.describe('coming off water rationing', () => {
         await expect(page.locator('#freshwater-preview-maker')).toHaveText('+6.000 L/hr');
         await expect(page.locator('#freshwater-preview-net')).toHaveText('+1.833 L/hr');
         await expect(page.locator('#freshwater-preview-verdict')).toContainText('Sustainable');
+        const blackBefore = await page.evaluate(() => window.game.systems.blackWater.current);
         await btn.click();
-        const after = await page.evaluate(() => ({ rationing: window.game.systems.freshWater.rationing, current: window.game.systems.freshWater.current }));
+        const after = await page.evaluate(() => ({ rationing: window.game.systems.freshWater.rationing, current: window.game.systems.freshWater.current,
+                                                   black: window.game.systems.blackWater.current }));
         expect(after.rationing).toBe(false);
+        expect(after.black).toBeCloseTo(blackBefore + 45, 5);
         expect(after.current).toBeCloseTo(before - 50 + 60 * (6 - 25 / 24) / 3600, 4); // the 50 L draw, plus that one minute of making vs rationed use
         await expect(page.locator('#freshwater-preview')).toBeHidden();
     });
@@ -631,6 +659,50 @@ test.describe('black water', () => {
         expect(result.health).toBeLessThan(86);
     });
 
+    test('an overflow spills into the cabin and stays until cleaned up, which takes fresh water and tank room', async ({ page }) => {
+        await startNewGame(page);
+        await freeze(page);
+
+        // A full tank and an hour's use (vents closed: all 4.167 L of it goes to black water).
+        const spilled = await page.evaluate(() => {
+            const g = window.game, b = g.systems.blackWater;
+            b.liquidL = 60; b.solidL = 30; b.residueL = 10;
+            g.systemUpdate.update(3600);
+            g.updateDisplay();
+            return { spill: g.systemUpdate.spilledL(), current: b.current, exposure: b.exposureHours, fresh: g.systems.freshWater.current };
+        });
+        expect(spilled.spill).toBeCloseTo(100 / 24, 5);
+        expect(spilled.current).toBeCloseTo(100, 5);
+        expect(spilled.exposure).toBeGreaterThan(0);
+        await expect(page.locator('#blackwater-exposure')).toContainText('crew exposed');
+        await expect(page.locator('#blackwater-exposure')).toContainText('Cleaning up uses 2.1 L of fresh water and needs 6.3 L free in the tank');
+
+        // No room in the tank to put it back.
+        const clean = page.locator('#blackwater-cleanup-btn');
+        await expect(clean).toBeVisible();
+        await expect(clean).toBeDisabled();
+        await expect(clean).toHaveAttribute('title', /tank is full/);
+
+        // A dump empties the tank, but the spill is still on the floor.
+        await page.click('#blackwater-dump-btn');
+        await expect(page.locator('#blackwater-exposure-row')).toBeVisible();
+        await expect(clean).toBeEnabled();
+        await clean.click();
+        const after = await page.evaluate(() => {
+            const g = window.game, b = g.systems.blackWater;
+            g.systemUpdate.update(1);
+            return { spill: g.systemUpdate.spilledL(), liquid: b.liquidL, exposure: b.exposureHours, fresh: g.systems.freshWater.current };
+        });
+        expect(after.spill).toBe(0);
+        // The spill and the half as much again of fresh water used to clean it are in the tank.
+        expect(after.liquid).toBeCloseTo((100 / 24) * 1.5 + 1 / 3600 * 100 / 24, 4);
+        expect(after.fresh).toBeCloseTo(spilled.fresh - (100 / 24) * 0.5 - 1 / 3600 * 100 / 24, 4);
+        expect(after.exposure).toBe(0);
+        await page.evaluate(() => window.game.updateDisplay());
+        await expect(page.locator('#blackwater-exposure-row')).toBeHidden();
+        await expect(clean).toBeHidden();
+    });
+
     test('dumping empties the whole tank without asking, and is fined 100 credits every time', async ({ page }) => {
         await startNewGame(page);
         await freeze(page);
@@ -640,10 +712,9 @@ test.describe('black water', () => {
             g.systems.blackWater.liquidL  = 60;
             g.systems.blackWater.solidL   = 30;
             g.systems.blackWater.residueL = 10;
-            g.systemUpdate.update(3600);
+            g.syncBlackWaterLevel();
             g.updateDisplay();
         });
-        await expect(page.locator('#blackwater-exposure')).toContainText('crew exposed');
 
         let asked = false;
         page.on('dialog', d => { asked = true; d.dismiss(); });

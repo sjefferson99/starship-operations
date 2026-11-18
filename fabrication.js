@@ -7,11 +7,18 @@
 // dashboard reads.
 //
 // State lives on the game as `game.cargo`:
-//   { items: { basicComponents: n, compostingAgent: n },
-//     boxes: [{ id, size, kind, fillL, sealed, compostHours, module }] }
+//   { items: {}, boxes: [{ id, size, kind, fillL, sealed, compostHours, module, parts }] }
+// (`items` held loose supplies before everything went into boxes; a payload
+// that still has some has them packed into boxes by GameState.restore.)
 //
 // There are two sizes of box. A STANDARD box (`size: 'standard'`) holds one
 // kind of thing at a time; `kind` is null while it's empty and unassigned.
+//   - 'parts':   supplies — basic and precision components and composting
+//                agent, mixed (`parts`: { itemKey: count }). Each takes up
+//                `litres` of the box (ITEMS); fillL is their total. Supplies
+//                bought, and what comes off a stripped drive, fill parts boxes
+//                with room first, then claim empty boxes. A parts box used up
+//                goes back to unassigned.
 //   - 'food':    food rations (fillL counts rations, one litre each). Bought
 //                rations go into food boxes with room, then into empty boxes.
 //                The crew eat from the emptiest food box first, and a food box
@@ -30,8 +37,12 @@
 // buy-salvage, repair, sell-at-a-profit loop.
 //
 // Fabrication jobs share the repair work queue (game.repairQueue) as tasks with
-// `kind: 'fabricate'`. RepairManager works them like any other task and calls
+// `kind: 'fabricate'` (and stripping a wrecked drive, `kind: 'strip'`, see
+// logistics.js). RepairManager works them like any other task and calls
 // completeTask() when the hours are done.
+//
+// Buying needs the market in reach (Logistics.tradeMode): at the port it comes
+// straight aboard; from Harlow's yard it waits at the port for a drone run.
 
 class Fabrication {
     static _boxSeq = 0; // makes box ids unique within a page session
@@ -39,14 +50,19 @@ class Fabrication {
     constructor(game) {
         this.game = game;
 
-        // Market supplies counted in `cargo.items`. Unlimited stock on any planet you can trade at.
+        // Market supplies, kept in parts boxes. Unlimited stock wherever you can trade.
+        // `litres` is the room one takes in a storage box.
         this.ITEMS = {
             basicComponents: {
-                name: 'Basic Components', price: 60, massKg: 5, volumeM3: 0.02,
+                name: 'Basic Components', price: 60, massKg: 5, litres: 4,
                 blurb: 'Standard plate, fixings and seals. Engineers fabricate simple things from them.',
             },
+            precisionComponents: {
+                name: 'Precision Components', price: 150, massKg: 2, litres: 2,
+                blurb: 'Machined bearings, injectors and control boards — what drives and docks are built from.',
+            },
             compostingAgent: {
-                name: 'Composting Agent', price: 30, massKg: 1, volumeM3: 0.005,
+                name: 'Composting Agent', price: 30, massKg: 1, litres: 1,
                 blurb: 'One dose readies an empty storage box to take solid waste and turn it into compost.',
             },
         };
@@ -59,11 +75,15 @@ class Fabrication {
         };
         this.STARTER_RATIONS      = 15; // aboard a new ship, in its one storage box: 5 days for one
 
-        // What engineers can make. `components` basic components are taken
-        // when the job is queued (and handed back if it's cancelled).
+        // What engineers can make. `components` are taken from the parts boxes
+        // when the job is queued (and handed back if it's cancelled). `makes`
+        // is what the finished job adds: a box of `size`, a drone dock, or a
+        // fitted module.
         this.RECIPES = {
-            storageBox: { name: 'Storage Box',         components: 1, hours: 4,  size: 'standard' },
-            machineBox: { name: 'Machine Storage Box', components: 2, hours: 10, size: 'machine' },
+            storageBox: { name: 'Storage Box',         components: { basicComponents: 1 }, hours: 4,  makes: 'box', size: 'standard' },
+            machineBox: { name: 'Machine Storage Box', components: { basicComponents: 2 }, hours: 10, makes: 'box', size: 'machine' },
+            droneDock:  { name: 'Drone Dock',          components: { precisionComponents: 1, basicComponents: 2 }, hours: 24, makes: 'dock' },
+            thrusters:  { name: 'Atmospheric Thrusters', components: { precisionComponents: 10, basicComponents: 12 }, hours: 72, makes: 'module', moduleKey: 'thrusters' },
         };
 
         // A box takes up the same space however full it is; its mass grows with
@@ -75,24 +95,30 @@ class Fabrication {
         this.COMPOST_PRICE_PER_L = 4;  // what a planet pays per litre of finished compost
         this.MIN_TRANSFER_L      = 0.01;
 
-        // What a planet pays for a stored module: a straight line by condition
-        // (compare CommsNav's 100–200 credit asking prices for 8–45% salvage).
+        // What a planet pays for a stored module, by condition on a curve
+        // (MODULE_SELL_CURVE): a damaged unit fetches little — less than
+        // CommsNav's 100–200 credit asking price for 8–45% salvage, so there's
+        // nothing in reselling it unrepaired — and a working one a lot. A repair
+        // is where the money is: 45% salvage at ~200 cr sells for 750 once fixed.
         // Jury-rigged units fetch less; destroyed ones are scrap.
         this.MODULE_SELL_MIN       = 40;
-        this.MODULE_SELL_MAX       = 400;
+        this.MODULE_SELL_MAX       = 750;
+        this.MODULE_SELL_CURVE     = 2;
         this.MODULE_JURY_RIG_VALUE = 0.6;
         this.MODULE_SCRAP_PRICE    = 15;
 
         // Selling floods the market: each recent sale of a module type cuts
         // what the next one of that type fetches by MODULE_RESALE_DROP, and
-        // each sale's effect wears off over MODULE_RESALE_RECOVERY_DAYS.
+        // each sale's effect wears off over MODULE_RESALE_RECOVERY_DAYS. Gentle:
+        // it takes a run of sales close together to really dent the price.
         // State: game.moduleResale = { moduleKey: recent sales (fractional) }.
-        this.MODULE_RESALE_DROP          = 0.2;
-        this.MODULE_RESALE_RECOVERY_DAYS = 10;
+        this.MODULE_RESALE_DROP          = 0.1;
+        this.MODULE_RESALE_RECOVERY_DAYS = 4;
 
         this.MODULE_NAMES = {
             o2: 'O₂ Generator', co2: 'CO₂ Scrubber', power: 'Power Generator',
             transceiver: 'Transceiver', waterMaker: 'Water Maker',
+            thrusters: 'Atmospheric Thrusters', ionDrive: 'Ion Drive',
         };
 
         // Page-session counter of swaps, so the observers (notifications.js,
@@ -101,7 +127,7 @@ class Fabrication {
     }
 
     static defaultCargo() {
-        return { items: { basicComponents: 0, compostingAgent: 0 }, boxes: [] };
+        return { items: {}, boxes: [] };
     }
 
     static _newBoxId() {
@@ -113,8 +139,102 @@ class Fabrication {
         return this.game.cargo;
     }
 
+    // How many of a supply are aboard, across every parts box.
     count(itemKey) {
-        return this._cargo().items[itemKey] ?? 0;
+        return this.partsBoxes().reduce((sum, b) => sum + (b.parts?.[itemKey] ?? 0), 0);
+    }
+
+    // ── Parts boxes ─────────────────────────────────────────────────────────
+
+    partsBoxes() {
+        return this.boxes().filter(b => b.kind === 'parts');
+    }
+
+    partLitres(itemKey) {
+        return this.ITEMS[itemKey]?.litres ?? 1;
+    }
+
+    _partsFillL(box) {
+        return Object.entries(box.parts ?? {}).reduce((sum, [k, n]) => sum + this.partLitres(k) * n, 0);
+    }
+
+    // Litres free for supplies: room in parts boxes plus every empty standard box.
+    partsRoomL() {
+        return this.standardBoxes().reduce((room, b) => {
+            if (b.kind === 'parts') return room + Math.max(0, this.BOX.capacityL - this._partsFillL(b));
+            if (!b.kind) return room + this.BOX.capacityL;
+            return room;
+        }, 0);
+    }
+
+    // How many of `itemKey` could be put away right now (box by box, since a
+    // unit can't be split across two boxes).
+    partsRoomFor(itemKey) {
+        const l = this.partLitres(itemKey);
+        return this.standardBoxes().reduce((n, b) => {
+            if (b.kind === 'parts') return n + Math.floor((this.BOX.capacityL - this._partsFillL(b) + 1e-9) / l);
+            if (!b.kind) return n + Math.floor((this.BOX.capacityL + 1e-9) / l);
+            return n;
+        }, 0);
+    }
+
+    // Puts `n` of a supply into parts boxes, fullest first, then claims empty
+    // boxes. With `force` (a refund, or parts off a stripped drive, which have
+    // to go somewhere), anything left over goes into a parts box regardless —
+    // or a new box if there's none. Returns how many were put away.
+    storeParts(itemKey, n, { force = false } = {}) {
+        const l = this.partLitres(itemKey);
+        let left = n;
+        const put = box => {
+            const fit = Math.min(left, Math.floor((this.BOX.capacityL - this._partsFillL(box) + 1e-9) / l));
+            if (fit <= 0) return;
+            box.parts[itemKey] = (box.parts[itemKey] ?? 0) + fit;
+            box.fillL = this._partsFillL(box);
+            left -= fit;
+        };
+        this.partsBoxes().slice().sort((a, b) => b.fillL - a.fillL).forEach(box => { if (left > 0) put(box); });
+        this.standardBoxes().filter(b => !b.kind).forEach(box => {
+            if (left <= 0) return;
+            this._clearBox(box);
+            box.kind = 'parts';
+            box.parts = {};
+            put(box);
+            if (!this._partsFillL(box)) this._clearBox(box);
+        });
+        if (left > 0 && force) {
+            let box = this.partsBoxes()[0];
+            if (!box) {
+                box = this._emptyBox('standard');
+                box.kind = 'parts';
+                box.parts = {};
+                this.boxes().push(box);
+            }
+            box.parts[itemKey] = (box.parts[itemKey] ?? 0) + left;
+            box.fillL = this._partsFillL(box);
+            left = 0;
+        }
+        return n - left;
+    }
+
+    // Takes `n` of a supply out, from the emptiest parts box first; a box left
+    // with nothing in it goes back to unassigned. Returns how many were taken.
+    takeParts(itemKey, n) {
+        let left = n;
+        this.partsBoxes().slice().sort((a, b) => a.fillL - b.fillL).forEach(box => {
+            const have = box.parts?.[itemKey] ?? 0;
+            if (left <= 0 || have <= 0) return;
+            const take = Math.min(left, have);
+            box.parts[itemKey] = have - take;
+            if (!box.parts[itemKey]) delete box.parts[itemKey];
+            box.fillL = this._partsFillL(box);
+            left -= take;
+            if (!Object.keys(box.parts).length) this._clearBox(box);
+        });
+        return n - left;
+    }
+
+    _partsMassKg(box) {
+        return Object.entries(box.parts ?? {}).reduce((sum, [k, n]) => sum + (this.ITEMS[k]?.massKg ?? 0) * n, 0);
     }
 
     boxes() {
@@ -145,17 +265,26 @@ class Fabrication {
     }
 
     _emptyBox(size = 'standard') {
-        return { id: Fabrication._newBoxId(), size, kind: null, fillL: 0, sealed: false, compostHours: 0, module: null };
+        return { id: Fabrication._newBoxId(), size, kind: null, fillL: 0, sealed: false, compostHours: 0, module: null, parts: null };
+    }
+
+    // An empty standard box to go with the food a new ship starts with, kept
+    // for what comes off the wrecked drives.
+    addStarterBox() {
+        const box = this._emptyBox('standard');
+        this.boxes().push(box);
+        return box;
     }
 
     // ── Box lifecycle ───────────────────────────────────────────────────────
 
-    // Standard: 'empty' → 'food', or 'empty' → 'filling' → 'composting' → 'ready'.
+    // Standard: 'empty' → 'food' | 'parts', or 'empty' → 'filling' → 'composting' → 'ready'.
     // Machine:  'empty' ↔ 'stored'.
     boxStatus(box) {
         if (this.isMachineBox(box)) return box.module ? 'stored' : 'empty';
         if (!box.kind) return 'empty';
         if (box.kind === 'food') return 'food';
+        if (box.kind === 'parts') return 'parts';
         if (!box.sealed) return 'filling';
         return box.compostHours >= this.COMPOST_HOURS ? 'ready' : 'composting';
     }
@@ -164,6 +293,7 @@ class Fabrication {
         if (this.isMachineBox(box)) {
             return this.MACHINE_BOX.emptyMassKg + (box.module ? this.moduleMassKg(box.module) : 0);
         }
+        if (box.kind === 'parts') return this.BOX.emptyMassKg + this._partsMassKg(box);
         return this.BOX.emptyMassKg + (box.fillL ?? 0) * this.BOX.contentDensityKgPerL;
     }
 
@@ -205,7 +335,7 @@ class Fabrication {
     dose(boxId) {
         if (this.doseBlocker(boxId)) return false;
         const box = this._box(boxId);
-        this._cargo().items.compostingAgent -= 1;
+        this.takeParts('compostingAgent', 1);
         box.kind = 'compost';
         box.fillL = 0;
         box.sealed = false;
@@ -279,13 +409,21 @@ class Fabrication {
         const box = this._box(boxId);
         if (!box) return 'No such box';
         if (this.boxStatus(box) !== 'ready') return 'Not compost yet';
-        if (!this._canTrade()) return 'You have to be on a planet, with the local network in range, to sell';
+        const mode = this.game.logistics.tradeMode();
+        if (!mode) return this.game.logistics.tradeBlocker();
+        if (mode === 'drone') return this.game.logistics.saleRunBlocker({ kind: 'compost', boxId });
         return null;
     }
 
-    // Sells the compost; the box goes back to empty and unassigned.
+    // Sells the compost; the box goes back to empty and unassigned. From the
+    // yard it goes by drone instead (up to a drone's load), and is paid for at
+    // the port — that returns 0 here.
     sell(boxId) {
         if (this.sellBlocker(boxId)) return 0;
+        if (this.game.logistics.tradeMode() === 'drone') {
+            this.game.logistics.sendForSale({ kind: 'compost', boxId });
+            return 0;
+        }
         const box = this._box(boxId);
         const price = this.salePrice(box);
         this.game.credits += price;
@@ -293,11 +431,28 @@ class Fabrication {
         return price;
     }
 
+    // Finished compost tipped out instead of sold, so the box can be used for
+    // something else. Free; the compost is simply lost. Only once it's ready.
+    emptyBlocker(boxId) {
+        const box = this._box(boxId);
+        if (!box) return 'No such box';
+        if (box.kind !== 'compost') return 'Only a compost box can be tipped out';
+        if (this.boxStatus(box) !== 'ready') return 'Only finished compost can be tipped out';
+        return null;
+    }
+
+    emptyBox(boxId) {
+        if (this.emptyBlocker(boxId)) return false;
+        this._clearBox(this._box(boxId));
+        return true;
+    }
+
     _clearBox(box) {
         box.kind = null;
         box.fillL = 0;
         box.sealed = false;
         box.compostHours = 0;
+        box.parts = null;
     }
 
     // ── Food ────────────────────────────────────────────────────────────────
@@ -364,19 +519,23 @@ class Fabrication {
     }
 
     buyFoodBlocker() {
-        if (!this._canTrade()) return 'You have to be on the planet to buy';
+        const mode = this.game.logistics.tradeMode();
+        if (!mode) return this.game.logistics.tradeBlocker();
         if (this.game.credits < this.FOOD.price) return 'Not enough credits';
+        const massKg = this.FOOD.caseSize * this.FOOD.massKgPerRation;
+        if (mode === 'drone') return this.game.logistics.orderBlocker(massKg);
         if (this.foodRoom() < this.FOOD.caseSize - 1e-9) {
             return 'No storage box with room for food — fabricate a storage box, or empty one';
         }
         // A box takes the same room full or empty, so only the mass is new.
-        return this.spaceBlocker(this.FOOD.caseSize * this.FOOD.massKgPerRation, 0);
+        return this.spaceBlocker(massKg, 0);
     }
 
     buyFood() {
         if (this.buyFoodBlocker()) return false;
         this.game.credits -= this.FOOD.price;
-        this._storeRations(this.FOOD.caseSize);
+        if (this.game.logistics.tradeMode() === 'drone') this.game.logistics.order({ kind: 'food', rations: this.FOOD.caseSize });
+        else this._storeRations(this.FOOD.caseSize);
         return true;
     }
 
@@ -397,15 +556,19 @@ class Fabrication {
     buyBlocker(itemKey) {
         const item = this.ITEMS[itemKey];
         if (!item) return 'Not sold here';
-        if (!this._canTrade()) return 'You have to be on the planet to buy';
+        const mode = this.game.logistics.tradeMode();
+        if (!mode) return this.game.logistics.tradeBlocker();
         if (this.game.credits < item.price) return 'Not enough credits';
-        return this.spaceBlocker(item.massKg, item.volumeM3);
+        if (mode === 'drone') return this.game.logistics.orderBlocker(item.massKg);
+        if (this.partsRoomFor(itemKey) < 1) return 'No storage box with room — fabricate a storage box, or empty one';
+        return this.spaceBlocker(item.massKg, 0);
     }
 
     buy(itemKey) {
         if (this.buyBlocker(itemKey)) return false;
         this.game.credits -= this.ITEMS[itemKey].price;
-        this._cargo().items[itemKey] = this.count(itemKey) + 1;
+        if (this.game.logistics.tradeMode() === 'drone') this.game.logistics.order({ kind: 'item', key: itemKey, count: 1 });
+        else this.storeParts(itemKey, 1);
         return true;
     }
 
@@ -463,20 +626,27 @@ class Fabrication {
         const factor = this.resaleFactor(module.moduleKey);
         if (module.destroyed) return Math.round(this.MODULE_SCRAP_PRICE * factor);
         const pct   = Math.max(0, Math.min(100, module.repairPct ?? 100)) / 100;
-        const value = this.MODULE_SELL_MIN + pct * (this.MODULE_SELL_MAX - this.MODULE_SELL_MIN);
+        const value = this.MODULE_SELL_MIN + Math.pow(pct, this.MODULE_SELL_CURVE) * (this.MODULE_SELL_MAX - this.MODULE_SELL_MIN);
         return Math.round(value * (module.juryRigged ? this.MODULE_JURY_RIG_VALUE : 1) * factor);
     }
 
     sellModuleBlocker(boxId) {
         const box = this._box(boxId);
         if (!box || !box.module) return 'Nothing stored';
-        if (!this._canTrade()) return 'You have to be on a planet, with the local network in range, to sell';
+        const mode = this.game.logistics.tradeMode();
+        if (!mode) return this.game.logistics.tradeBlocker();
+        if (mode === 'drone') return this.game.logistics.saleRunBlocker({ kind: 'module', boxId });
         return null;
     }
 
-    // Sells the stored module (any repair queued on it goes with it).
+    // Sells the stored module (any repair queued on it goes with it). From the
+    // yard it goes by drone and is paid for at the port — that returns 0 here.
     sellModule(boxId) {
         if (this.sellModuleBlocker(boxId)) return 0;
+        if (this.game.logistics.tradeMode() === 'drone') {
+            this.game.logistics.sendForSale({ kind: 'module', boxId });
+            return 0;
+        }
         const box   = this._box(boxId);
         const price = this.moduleSaleValue(box.module);
         this.game.credits += price;
@@ -533,14 +703,33 @@ class Fabrication {
 
     // ── Fabrication jobs ────────────────────────────────────────────────────
 
-    _recipeBox(recipe) {
+    // Mass and volume of what a recipe makes.
+    _recipeProduct(recipe) {
+        if (recipe.makes === 'dock') {
+            return { massKg: this.game.logistics.dockSpec('massKg'), volumeM3: this.game.logistics.dockSpec('volumeM3') };
+        }
+        if (recipe.makes === 'module') {
+            return {
+                massKg:   this.game._moduleField(recipe.moduleKey, 1, 'massKg', 0),
+                volumeM3: this.game._moduleField(recipe.moduleKey, 1, 'volumeM3', 0),
+            };
+        }
         return recipe.size === 'machine'
             ? { massKg: this.MACHINE_BOX.emptyMassKg, volumeM3: this.MACHINE_BOX.volumeM3 }
             : { massKg: this.BOX.emptyMassKg,         volumeM3: this.BOX.volumeM3 };
     }
 
-    // Queued jobs already hold their components; the box they'll make is
-    // counted against ship space from the moment it's queued.
+    // "10 precision + 12 basic components"
+    componentsLabel(recipe) {
+        const parts = Object.entries(recipe.components);
+        const total = parts.reduce((sum, [, n]) => sum + n, 0);
+        return parts
+            .map(([k, n]) => `${n} ${this.ITEMS[k].name.toLowerCase().replace(' components', '')}`)
+            .join(' + ') + (total === 1 ? ' component' : ' components');
+    }
+
+    // Queued jobs already hold their components; what they'll make is counted
+    // against ship space from the moment they're queued.
     queuedJobs() {
         return (this.game.repairQueue || []).filter(t => t.kind === 'fabricate');
     }
@@ -548,21 +737,27 @@ class Fabrication {
     fabricateBlocker(recipeKey) {
         const recipe = this.RECIPES[recipeKey];
         if (!recipe) return 'Unknown recipe';
-        if (this.count('basicComponents') < recipe.components) {
-            return `Needs ${recipe.components} basic component${recipe.components === 1 ? '' : 's'} — buy them on the market`;
+        if (recipe.makes === 'module') {
+            const sys = this.game.systems[recipe.moduleKey];
+            if (sys && sys.installed !== false) {
+                return sys.destroyed ? `Strip the wrecked ${recipe.name.toLowerCase()} for parts first` : 'Already fitted';
+            }
+            if (this.queuedJobs().some(t => t.recipeKey === recipeKey)) return 'Already being made';
         }
-        // The components leave the hold and a box takes their place.
-        const comp = this.ITEMS.basicComponents;
-        const box  = this._recipeBox(recipe);
-        return this.spaceBlocker(
-            box.massKg   - comp.massKg * recipe.components,
-            box.volumeM3 - comp.volumeM3 * recipe.components);
+        const short = Object.entries(recipe.components).filter(([k, n]) => this.count(k) < n);
+        if (short.length) {
+            return 'Needs ' + short.map(([k, n]) => `${n} ${this.ITEMS[k].name.toLowerCase()} (${this.count(k)} aboard)`).join(' and ');
+        }
+        // The components leave their boxes and the product takes their place.
+        const used = Object.entries(recipe.components).reduce((sum, [k, n]) => sum + this.ITEMS[k].massKg * n, 0);
+        const made = this._recipeProduct(recipe);
+        return this.spaceBlocker(made.massKg - used, made.volumeM3);
     }
 
     queueFabrication(recipeKey) {
         if (this.fabricateBlocker(recipeKey)) return null;
         const recipe = this.RECIPES[recipeKey];
-        this._cargo().items.basicComponents -= recipe.components;
+        Object.entries(recipe.components).forEach(([k, n]) => this.takeParts(k, n));
         const task = {
             // Unique id without a roll (see RepairManager.startRepair).
             id: `fab-${Date.now().toString(36)}-${++Fabrication._boxSeq}`,
@@ -580,33 +775,42 @@ class Fabrication {
     // A cancelled job gives its components back.
     refund(task) {
         const recipe = this.RECIPES[task.recipeKey];
-        if (recipe) this._cargo().items.basicComponents = this.count('basicComponents') + recipe.components;
+        if (recipe) Object.entries(recipe.components).forEach(([k, n]) => this.storeParts(k, n, { force: true }));
     }
 
+    // A finished job (fabrication or stripping a drive) delivers its result.
     completeTask(task) {
+        if (task.kind === 'strip') { this.game.logistics.completeStrip(task); return; }
         const recipe = this.RECIPES[task.recipeKey];
-        if (recipe) this.boxes().push(this._emptyBox(recipe.size));
         task.status = 'done';
+        if (!recipe) return;
+        if (recipe.makes === 'dock') {
+            this.game.droneDocks = (this.game.droneDocks ?? 0) + 1;
+            this.game.notifications?.add({ key: 'fab:droneDock', level: 'good', title: 'Drone dock fabricated', detail: 'Dock a drone on it to charge from spare generator power.' });
+        } else if (recipe.makes === 'module') {
+            const sys = this.game.systems[recipe.moduleKey];
+            Object.assign(sys, { installed: true, destroyed: false, juryRigged: false, repairPct: 100, active: false });
+            this.game.notifications?.add({ key: `fab:${task.recipeKey}`, level: 'good', title: `${recipe.name} fitted`, detail: 'Built new in the work queue.' });
+        } else {
+            this.boxes().push(this._emptyBox(recipe.size));
+        }
     }
 
     // ── Ship capacity rows ──────────────────────────────────────────────────
 
     capacityItems() {
         const rows = [];
-        Object.entries(this.ITEMS).forEach(([key, item]) => {
-            const n = this.count(key);
-            if (n > 0) rows.push({ label: item.name, count: n, massKg: item.massKg * n, volumeM3: item.volumeM3 * n });
-        });
         this.boxes().forEach(box => {
             const what = box.kind === 'food' ? ' (food)'
+                : box.kind === 'parts' ? ' (parts)'
                 : box.module ? ` (${this.moduleName(box.module.moduleKey)})` : '';
             rows.push({ label: this.boxLabel(box) + what, count: 1, massKg: this.boxMassKg(box), volumeM3: this.boxVolumeM3(box) });
         });
         Object.entries(this.RECIPES).forEach(([key, recipe]) => {
             const pending = this.queuedJobs().filter(t => t.recipeKey === key).length;
             if (!pending) return;
-            const box = this._recipeBox(recipe);
-            rows.push({ label: `${recipe.name} (being made)`, count: pending, massKg: box.massKg * pending, volumeM3: box.volumeM3 * pending });
+            const made = this._recipeProduct(recipe);
+            rows.push({ label: `${recipe.name} (being made)`, count: pending, massKg: made.massKg * pending, volumeM3: made.volumeM3 * pending });
         });
         return rows;
     }

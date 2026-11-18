@@ -27,10 +27,13 @@ test.describe('autosave', () => {
             GameState.saveServer = async () => { window.__saveCalls++; };
         });
 
-        await page.evaluate(() => window.game._autosave());
-
-        const calls = await page.evaluate(() => window.__saveCalls);
-        expect(calls).toBe(1);
-        await expect(page.locator('#save-status')).toHaveText('Autosaved');
+        // Read the message in the same step: it hides itself after 3 s, which a
+        // busy test machine can take between two separate round trips.
+        const r = await page.evaluate(async () => {
+            await window.game._autosave();
+            return { calls: window.__saveCalls, text: document.getElementById('save-status').textContent };
+        });
+        expect(r.calls).toBe(1);
+        expect(r.text).toBe('Autosaved');
     });
 });

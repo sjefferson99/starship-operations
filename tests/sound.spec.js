@@ -108,6 +108,7 @@ test.describe('sound effects', () => {
             const g = window.game;
             g.systems.transceiver.repairPct = 100; g.systems.transceiver.active = true;
             g.systemUpdate.update(1);
+            g.berth = 'port'; // trade is direct at the port
             window.sound._prev = window.sound._snapshot(); // re-baseline: the setup above isn't the event under test
             g.commsNav.purchase(g.market.find(l => l.moduleKey === 'waterMaker').id);
         });

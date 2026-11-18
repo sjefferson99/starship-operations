@@ -41,6 +41,15 @@ class CommsNav {
             { moduleKey: 'o2',          name: 'O₂ Generator',    count: 1 },
             { moduleKey: 'co2',         name: 'CO₂ Scrubber',    count: 1 },
         ];
+        // Fresh salvage keeps reaching Port Carrow's yards: at each of these hours on
+        // the ship's clock one more unit comes in, of a kind a transfer drone can
+        // carry, while there are fewer than `max` of that kind for sale. It's what
+        // keeps the buy-repair-sell loop going from the salvage yard.
+        this.RESTOCK_HOURS = [3, 11, 19];
+        this.RESTOCK = [
+            { moduleKey: 'waterMaker',  name: 'Water Maker', max: 3 },
+            { moduleKey: 'transceiver', name: 'Transceiver', max: 3 },
+        ];
     }
 
     // Random 32-bit seed, used both for the initial roll shown on the seed
@@ -150,22 +159,57 @@ class CommsNav {
 
     _generateMarket(rng, home) {
         const listings = [];
-        const span = this.MARKET_MAX_REPAIR - this.MARKET_MIN_REPAIR;
         this.MARKET_STOCK.forEach(stock => {
             for (let i = 0; i < stock.count; i++) {
-                const repairPct = Math.round(this.MARKET_MIN_REPAIR + rng() * span);
-                const condition = (repairPct - this.MARKET_MIN_REPAIR) / span;
-                listings.push({
-                    id: `mkt-${listings.length + 1}`,
-                    locationId: home.id,
-                    moduleKey: stock.moduleKey,
-                    name: `Salvaged ${stock.name}`,
-                    repairPct,
-                    price: Math.round(this.MARKET_MIN_PRICE + condition * (this.MARKET_MAX_PRICE - this.MARKET_MIN_PRICE)),
-                });
+                listings.push(this._salvageListing(rng, home, stock, `mkt-${listings.length + 1}`));
             }
         });
         return listings;
+    }
+
+    // One unit of salvage: condition rolled in the market's range, priced by it.
+    _salvageListing(rng, home, stock, id) {
+        const span      = this.MARKET_MAX_REPAIR - this.MARKET_MIN_REPAIR;
+        const repairPct = Math.round(this.MARKET_MIN_REPAIR + rng() * span);
+        const condition = (repairPct - this.MARKET_MIN_REPAIR) / span;
+        return {
+            id, locationId: home.id, moduleKey: stock.moduleKey, name: `Salvaged ${stock.name}`, repairPct,
+            price: Math.round(this.MARKET_MIN_PRICE + condition * (this.MARKET_MAX_PRICE - this.MARKET_MIN_PRICE)),
+        };
+    }
+
+    // Called every tick: for each restock hour the clock crossed this tick, one
+    // unit of the drone-sized salvage that's shortest comes in. Found from
+    // gameTime (like meals), so it needs no state of its own; rolls go through
+    // game.rng so a rewind replays them.
+    update(dt) {
+        const home = this.home();
+        if (!home || !(dt > 0)) return;
+        const end = this.game.gameTime, from = end - dt;
+        let added = 0;
+        for (let day = Math.floor(from / 86400); day * 86400 <= end; day++) {
+            this.RESTOCK_HOURS.forEach(h => {
+                const t = day * 86400 + h * 3600;
+                if (t > from && t <= end && this._restockOne(home, t)) added++;
+            });
+        }
+        if (added > 0) {
+            this.game.notifications?.add({
+                key: 'market:restock', level: 'info', title: 'New salvage at the port',
+                detail: 'Fresh salvage is on the market — see Comms & Nav.',
+            });
+        }
+    }
+
+    _restockOne(home, t) {
+        const market = this.game.market ?? (this.game.market = []);
+        const have = key => market.filter(l => l.moduleKey === key).length;
+        const short = this.RESTOCK.filter(s => have(s.moduleKey) < s.max);
+        if (!short.length) return false;
+        // The kind with fewest for sale; ties by the list order.
+        const stock = short.reduce((a, b) => (have(b.moduleKey) < have(a.moduleKey) ? b : a));
+        market.push(this._salvageListing(() => this.game.rng.next(), home, stock, `mkt-r${Math.round(t)}-${stock.moduleKey}`));
+        return true;
     }
 
     listingsAt(loc) {
@@ -173,13 +217,20 @@ class CommsNav {
         return (this.game.market || []).filter(l => l.locationId === loc.id);
     }
 
-    // Purchases are in person only for now: the ship has to be at the
-    // location, it has to be a planet, and the local network has to be in
-    // range. (Delivery, drones and station trade come later.)
+    // Trade needs the ship on the planet (it always is, for now — Harlow's yard
+    // or Port Carrow) with the local network in range, and not in the air.
+    // From the yard what's bought waits at the port for a drone (logistics.js).
     canTradeAt(loc) {
         const home = this.home();
         return !!loc && !!home && loc.id === home.id &&
-               this.locationTypeLabel(home) === 'Planet' && this.hasLocalDetails();
+               this.locationTypeLabel(home) === 'Planet' && this.game.logistics.tradeMode() != null;
+    }
+
+    // A fit order already waiting at the port (or on a drone) for this module.
+    _fitOnOrder(moduleKey) {
+        const lg = this.game.logistics;
+        const pending = [...(this.game.portHold ?? []), ...lg.drones().flatMap(d => d.cargoIn ?? [])];
+        return pending.some(e => e.kind === 'module' && e.moduleKey === moduleKey && e.dest !== 'store');
     }
 
     // Returns null if `listing` can be bought right now, otherwise the reason not.
@@ -189,35 +240,50 @@ class CommsNav {
         const sys = this.game.systems[listing.moduleKey];
         if (!sys) return 'Not compatible with this ship';
         const loc = (this.game.commsLocations || []).find(l => l.id === listing.locationId);
-        if (!this.canTradeAt(loc)) return 'You have to be on the planet to buy';
+        if (!this.canTradeAt(loc)) return this.game.logistics.tradeBlocker() ?? 'You have to be on the planet to buy';
+        const fab = this.game.fabrication;
+        const massKg = fab.moduleMassKg({ moduleKey: listing.moduleKey, tier: 1 });
+        const drone = this.game.logistics.tradeMode() === 'drone';
         if (dest === 'store') {
-            const fab = this.game.fabrication;
-            if (!fab.emptyMachineBox()) return 'Needs an empty machine storage box';
             if (this.game.credits < listing.price) return 'Not enough credits';
-            return fab.spaceBlocker(fab.moduleMassKg({ moduleKey: listing.moduleKey, tier: 1 }), 0);
+            // From the yard it only waits at the port, so it can be bought ahead of
+            // having a box free for it; Plan Run won't bring it back until there is one.
+            if (drone) return this.game.logistics.orderBlocker(massKg);
+            if (!fab.emptyMachineBox()) return 'Needs an empty machine storage box';
+            return fab.spaceBlocker(massKg, 0);
         }
         if (sys.installed !== false && !sys.destroyed) return 'Already fitted — only needed if yours is destroyed, or to store in a machine box';
+        if (this._fitOnOrder(listing.moduleKey)) return 'One is already on its way';
         if (this.game.credits < listing.price) return 'Not enough credits';
-        return null;
+        return drone ? this.game.logistics.orderBlocker(massKg) : null;
     }
 
-    // Fits the bought unit straight into the ship in whatever state it was
-    // sold in, replacing a destroyed one if there was one — or, with
-    // dest 'store', puts it in an empty machine box. Returns true on success.
+    // Fits a unit in whatever state it comes in, replacing a destroyed one if
+    // there was one. Any repair queued on the old one goes with it.
+    fitModule(moduleKey, repairPct) {
+        const sys = this.game.systems[moduleKey];
+        sys.installed  = true;
+        sys.destroyed  = false;
+        sys.juryRigged = false;
+        sys.active     = false;
+        sys.repairPct  = repairPct;
+        this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== moduleKey);
+    }
+
+    // At the port the bought unit goes straight in (or into an empty machine
+    // box, with dest 'store'); from the yard it's ordered, and a drone brings
+    // it. Returns true on success.
     purchase(listingId, dest = 'fit') {
         const listing = (this.game.market || []).find(l => l.id === listingId);
         if (!listing || this.purchaseBlocker(listing, dest)) return false;
 
-        if (dest === 'store') {
-            this.game.fabrication.storeModule({ moduleKey: listing.moduleKey, tier: 1, repairPct: listing.repairPct });
+        const module = { moduleKey: listing.moduleKey, tier: 1, repairPct: listing.repairPct };
+        if (this.game.logistics.tradeMode() === 'drone') {
+            this.game.logistics.order({ kind: 'module', ...module, dest });
+        } else if (dest === 'store') {
+            this.game.fabrication.storeModule(module);
         } else {
-            const sys = this.game.systems[listing.moduleKey];
-            sys.installed  = true;
-            sys.destroyed  = false;
-            sys.juryRigged = false;
-            sys.active     = false;
-            sys.repairPct  = listing.repairPct;
-            this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== listing.moduleKey);
+            this.fitModule(listing.moduleKey, listing.repairPct);
         }
 
         this.game.credits -= listing.price;

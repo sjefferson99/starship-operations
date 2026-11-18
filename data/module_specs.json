@@ -71,7 +71,6 @@
       "1": {
         "powerDrawW": 30,
         "atmospherePowerFactor": 0.4,
-        "reclaimYield": 0.9,
         "outputLhr": 6.0,
         "massKg": 24,
         "volumeM3": 0.2,
@@ -83,6 +82,47 @@
           { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 3 },
           { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
         ]
+      }
+    },
+    "_drives": "Propulsion (logistics.js). Not repairable yet: a wrecked drive is stripped for parts, and atmospheric thrusters are fabricated new. fuelPerHopL = fuel for one hop across the planet (Harlow's yard <-> Port Carrow).",
+    "thrusters": {
+      "1": {
+        "massKg": 90,
+        "volumeM3": 0.8,
+        "fuelPerHopL": 20,
+        "cruiseKmh": 400
+      }
+    },
+    "ionDrive": {
+      "1": {
+        "massKg": 140,
+        "volumeM3": 1.2
+      }
+    },
+    "_transferDrone": "A vehicle, not a module: it parks outside, is stowed aboard, or sits on a drone dock to charge. Energy use and wear are per km flown; payloadKg limits what one run carries.",
+    "transferDrone": {
+      "1": {
+        "massKg": 22,
+        "volumeM3": 0.3,
+        "payloadKg": 35,
+        "speedKmh": 100,
+        "batteryWh": 1500,
+        "whPerKm": 5,
+        "wearPctPerKm": 0.02,
+        "juryRigWearMultiplier": 10,
+        "repairStages": [
+          { "name": "Patch up", "toPct": 50,  "efficiency": 0.50, "hours": 3 },
+          { "name": "Overhaul", "toPct": 80,  "efficiency": 0.80, "hours": 3 },
+          { "name": "Tune-up",  "toPct": 100, "efficiency": 1.00, "hours": 2 }
+        ]
+      }
+    },
+    "_droneDock": "Charges one docked drone from spare generator output only (never from the ship battery), up to chargeW.",
+    "droneDock": {
+      "1": {
+        "massKg": 15,
+        "volumeM3": 0.15,
+        "chargeW": 120
       }
     }
   }

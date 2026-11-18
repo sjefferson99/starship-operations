@@ -79,6 +79,8 @@ class GameState {
             },
             transceiver: GameState._moduleSnapshot(s.transceiver),
             waterMaker:  GameState._moduleSnapshot(s.waterMaker),
+            thrusters:   GameState._moduleSnapshot(s.thrusters),
+            ionDrive:    GameState._moduleSnapshot(s.ionDrive),
             fuel: {
                 currentL: s.fuel.current, capacityL: s.fuel.capacity,
             },
@@ -89,6 +91,8 @@ class GameState {
                 blackLiquidL: s.blackWater.liquidL, blackSolidL: s.blackWater.solidL, blackCapacityL: s.blackWater.capacity,
                 blackExposureHours: s.blackWater.exposureHours ?? 0,
                 blackResidueL: s.blackWater.residueL ?? 0,
+                blackSpillLiquidL: s.blackWater.spillLiquidL ?? 0,
+                blackSpillSolidL:  s.blackWater.spillSolidL ?? 0,
             },
             // The rations themselves are in the cargo's food boxes.
             food: {
@@ -107,6 +111,7 @@ class GameState {
                 systemState,
                 repairQueue: game.repairQueue ?? [],
                 cargo: GameState._cargoSnapshot(game.cargo),
+                logistics: GameState._logisticsSnapshot(game),
             }],
         };
     }
@@ -120,6 +125,35 @@ class GameState {
         };
     }
 
+    // Where the ship is berthed, her drones and what's waiting at the port (logistics.js).
+    static _logisticsSnapshot(game) {
+        const clone = list => (list ?? []).map(e => ({ ...e }));
+        return {
+            berth: game.berth ?? 'yard',
+            flight: game.flight ? { ...game.flight } : null,
+            droneDocks: game.droneDocks ?? 0,
+            drones: (game.drones ?? []).map(d => ({ ...d, cargoOut: clone(d.cargoOut), cargoIn: clone(d.cargoIn), plan: clone(d.plan), planOut: clone(d.planOut ?? []) })),
+            portHold: clone(game.portHold),
+        };
+    }
+
+    // A payload from before logistics: at Harlow's yard, no drones, nothing ordered.
+    static _applyLogistics(game, saved) {
+        game.logistics.reset();
+        if (!saved) return;
+        game.berth      = saved.berth === 'port' ? 'port' : 'yard';
+        game.flight     = saved.flight && saved.flight.to ? { ...saved.flight } : null;
+        game.droneDocks = saved.droneDocks ?? 0;
+        game.drones     = (saved.drones ?? []).map(d => ({
+            id: d.id, tier: d.tier ?? 1, repairPct: d.repairPct ?? 100, juryRigged: !!d.juryRigged, destroyed: !!d.destroyed,
+            chargeWh: d.chargeWh ?? 0, chargeFromBattery: !!d.chargeFromBattery, state: d.state ?? 'stowed', hoursLeft: d.hoursLeft ?? 0,
+            plan: (d.plan ?? []).filter(p => p && p.holdId != null && p.qty > 0).map(p => ({ holdId: p.holdId, qty: p.qty })),
+            planOut: (d.planOut ?? []).filter(o => o && o.boxId != null).map(o => ({ kind: o.kind === 'compost' ? 'compost' : 'module', boxId: o.boxId })),
+            cargoOut: (d.cargoOut ?? []).map(e => ({ ...e })), cargoIn: (d.cargoIn ?? []).map(e => ({ ...e })),
+        }));
+        game.portHold = (saved.portHold ?? []).map(e => ({ ...e }));
+    }
+
     // One storage box, normalised. Boxes saved before machine boxes existed
     // have no `size` (they were all standard) and no `module`.
     static _box(b) {
@@ -127,6 +161,7 @@ class GameState {
         return {
             id: b.id, size: b.size === 'machine' ? 'machine' : 'standard',
             kind: b.kind ?? null, fillL: b.fillL ?? 0,
+            parts: b.kind === 'parts' ? { ...(b.parts ?? {}) } : null,
             sealed: !!b.sealed, compostHours: b.compostHours ?? 0,
             module: m && m.moduleKey ? {
                 moduleKey: m.moduleKey, tier: m.tier ?? 1, repairPct: m.repairPct ?? 100,
@@ -135,12 +170,16 @@ class GameState {
         };
     }
 
-    // Payloads from before fabrication have no cargo: an empty hold.
+    // Payloads from before fabrication have no cargo: an empty hold. Payloads
+    // from before supplies went into boxes have them loose in `items`: they're
+    // packed into parts boxes (a new box if none has room).
     static _applyCargo(game, saved) {
         const cargo = Fabrication.defaultCargo();
-        Object.entries(saved?.items ?? {}).forEach(([key, n]) => { cargo.items[key] = n ?? 0; });
         cargo.boxes = (saved?.boxes ?? []).map(GameState._box);
         game.cargo = cargo;
+        Object.entries(saved?.items ?? {}).forEach(([key, n]) => {
+            if (n > 0 && game.fabrication.ITEMS[key]) game.fabrication.storeParts(key, n, { force: true });
+        });
     }
 
     // A payload from before food existed has none aboard. Rather than have the
@@ -212,6 +251,7 @@ class GameState {
             game.repairQueue = inst?.repairQueue ?? [];
             GameState._applyCargo(game, inst?.cargo);
             if (!GameState._hasFoodState(inst?.systemState)) game.fabrication.addStarterFood();
+            GameState._applyLogistics(game, inst?.logistics);
         }
     }
 
@@ -261,6 +301,9 @@ class GameState {
         game.systems.blackWater.liquidL  = water.blackLiquidL ?? 0;
         game.systems.blackWater.solidL   = water.blackSolidL ?? 0;
         game.systems.blackWater.residueL = water.blackResidueL ?? 0; // absent before unreclaimable residue existed
+        game.systems.blackWater.spillLiquidL = water.blackSpillLiquidL ?? 0; // absent before spills were kept
+        game.systems.blackWater.spillSolidL  = water.blackSpillSolidL ?? 0;
+        game.systemUpdate.settleResidue(); // older saves' residue was a processing loss: re-split it by the solids
         game.systems.blackWater.current  = game.systems.blackWater.liquidL + game.systems.blackWater.solidL + game.systems.blackWater.residueL;
         game.systems.blackWater.capacity = water.blackCapacityL ?? 100;
         game.systems.blackWater.level    = (game.systems.blackWater.current / game.systems.blackWater.capacity) * 100;
@@ -276,6 +319,9 @@ class GameState {
 
         GameState._applyModule(game.systems.transceiver, s.transceiver, { active: true, repairPct: 100, installed: true });
         GameState._applyModule(game.systems.waterMaker,  s.waterMaker,  { active: false, repairPct: 100, installed: false });
+        // Before drives existed, every ship had them — wrecked, as a new one does.
+        GameState._applyModule(game.systems.thrusters,   s.thrusters,   { active: false, repairPct: 0, destroyed: true, installed: true });
+        GameState._applyModule(game.systems.ionDrive,    s.ionDrive,    { active: false, repairPct: 0, destroyed: true, installed: true });
     }
 
     // ── Save slots (requires: node server.js) ──────────────────────────────
@@ -375,6 +421,7 @@ class GameState {
         snap.shipSystemState = shipInstance.systemState;
         snap.repairQueue     = shipInstance.repairQueue;
         snap.cargo           = shipInstance.cargo;
+        snap.logistics       = shipInstance.logistics;
 
         const day  = Math.floor(snap.world.gameTime / 86400) + 1;
         const json = JSON.stringify(snap, null, 2);
@@ -400,7 +447,7 @@ class GameState {
                     const snap = JSON.parse(ev.target.result);
                     // Exported files embed ship system state directly
                     const pseudoInstances = snap.shipSystemState
-                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState, repairQueue: snap.repairQueue ?? [], cargo: snap.cargo }] }
+                        ? { ships: [{ id: snap.shipInstanceId ?? 'player-ship-1', name: game.shipName, registration: game.shipRegistration, systemState: snap.shipSystemState, repairQueue: snap.repairQueue ?? [], cargo: snap.cargo, logistics: snap.logistics }] }
                         : null;
                     GameState.restore(game, snap, pseudoInstances);
                     onDone(null);

@@ -481,10 +481,6 @@
                                             <span class="source-key-air">Outside air <strong id="watermaker-split-air-pct">0%</strong></span>
                                         </div>
                                     </div>
-                                    <div class="rate-row">
-                                        <span class="rate-label" title="Of each litre of black-water liquid processed, this much comes back as fresh water; the rest stays in the tank as residue.">Reclaim yield:</span>
-                                        <span class="rate-value" id="watermaker-yield">&mdash;</span>
-                                    </div>
                                     <div class="rate-row rate-net-row">
                                         <span class="rate-label">Power draw:</span>
                                         <span class="rate-value" id="watermaker-draw">0.00 W</span>
@@ -542,7 +538,7 @@
                                     <span class="rate-value" id="blackwater-solid">0.00 L</span>
                                 </div>
                                 <div class="rate-row" id="blackwater-residue-row" style="display:none">
-                                    <span class="rate-label" title="What the water maker processed but couldn't turn back into fresh water. Only dumping clears it.">Unreclaimable residue:</span>
+                                    <span class="rate-label" title="Liquid soaked into the solid waste, which the water maker can't draw out. Move the solids to a compost box and it becomes free liquid again.">Held in solids:</span>
                                     <span class="rate-value" id="blackwater-residue">0.00 L</span>
                                 </div>
                                 <div class="rate-row" id="blackwater-reclaim-row" style="display:none">
@@ -561,6 +557,7 @@
                         </div>
                         <div class="system-controls">
                             <span id="blackwater-status">Tank: <strong>0%</strong> full</span>
+                            <button id="blackwater-cleanup-btn" class="toggle-btn btn-on" style="display:none">Clean Up Spill</button>
                             <button id="blackwater-dump-btn" class="toggle-btn btn-off">Dump to Space</button>
                         </div>
                         <div class="system-controls">
@@ -689,6 +686,53 @@
                 </div>
             </section>
 
+            <!-- Drives and the drones that fetch and carry while she can't fly (logistics.js).
+                 Filled in by main.js _displayLogistics. -->
+            <section class="card-group" id="group-logistics" data-group="logistics">
+                <button class="card-group-header" aria-expanded="true" aria-controls="group-logistics-cards">
+                    <span class="card-group-caret" aria-hidden="true">&#9662;</span>
+                    <span class="card-group-title">Propulsion &amp; Logistics</span>
+                    <span class="card-group-status" id="group-logistics-status"></span>
+                </button>
+                <div class="card-group-cards" id="group-logistics-cards">
+                    <div class="system-card" id="card-thrusters">
+                        <div class="card-header">
+                            <h3>Atmospheric Thrusters</h3>
+                            <span class="status-badge badge-critical" id="thrusters-badge">WRECKED</span>
+                        </div>
+                        <div class="main-value">
+                            <span class="value-large" id="thrusters-value">&mdash;</span>
+                            <span class="value-label" id="thrusters-label"></span>
+                        </div>
+                        <div class="card-details logi-details" id="thrusters-details"></div>
+                        <div class="system-controls logi-controls" id="thrusters-controls"></div>
+                    </div>
+                    <div class="system-card" id="card-iondrive">
+                        <div class="card-header">
+                            <h3>Ion Drive</h3>
+                            <span class="status-badge badge-critical" id="iondrive-badge">WRECKED</span>
+                        </div>
+                        <div class="main-value">
+                            <span class="value-large" id="iondrive-value">&mdash;</span>
+                            <span class="value-label" id="iondrive-label"></span>
+                        </div>
+                        <div class="card-details logi-details" id="iondrive-details"></div>
+                        <div class="system-controls logi-controls" id="iondrive-controls"></div>
+                    </div>
+                    <div class="system-card" id="card-drone">
+                        <div class="card-header">
+                            <h3>Transfer Drones</h3>
+                            <span class="status-badge badge-warning" id="drone-badge">NONE</span>
+                        </div>
+                        <div class="main-value">
+                            <span class="value-large" id="drone-value">0</span>
+                            <span class="value-label" id="drone-label">drones</span>
+                        </div>
+                        <div class="card-details logi-details" id="drone-details"></div>
+                    </div>
+                </div>
+            </section>
+
             </div>
 
                 <!-- Environment / Vent Panel -->
@@ -734,25 +778,31 @@
     </div>
 
     <div id="task-queue-screen" class="overlay-screen" style="display: none;">
-        <div class="overlay-card">
+        <div class="overlay-card task-queue-card">
             <div class="overlay-header">
                 <h2>Work Queue</h2>
                 <button id="task-queue-close-btn" class="overlay-close-btn">&times;</button>
             </div>
             <p class="repair-crew-status" id="repair-crew-status">Engineering on duty: 0/0</p>
 
-            <h3 class="overlay-section-title">Available Repairs</h3>
-            <ul id="repair-available-list" class="overlay-list">
-                <li class="task-empty">No repairs currently needed.</li>
-            </ul>
+            <!-- What could be done on the left, what's queued on the right; each column scrolls on its own. -->
+            <div class="task-queue-columns">
+                <div class="task-queue-col task-queue-col-options">
+                    <h3 class="overlay-section-title">Available Repairs</h3>
+                    <ul id="repair-available-list" class="overlay-list">
+                        <li class="task-empty">No repairs currently needed.</li>
+                    </ul>
 
-            <h3 class="overlay-section-title">Fabrication</h3>
-            <ul id="fabrication-list" class="overlay-list"></ul>
-
-            <h3 class="overlay-section-title">Queue</h3>
-            <ul id="repair-queue-list" class="overlay-list">
-                <li class="task-empty">Nothing queued.</li>
-            </ul>
+                    <h3 class="overlay-section-title">Fabrication</h3>
+                    <ul id="fabrication-list" class="overlay-list"></ul>
+                </div>
+                <div class="task-queue-col task-queue-col-queue">
+                    <h3 class="overlay-section-title">Queue</h3>
+                    <ul id="repair-queue-list" class="overlay-list">
+                        <li class="task-empty">Nothing queued.</li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -879,6 +929,17 @@
         </div>
     </div>
 
+    <!-- Plan Run: what a drone brings back from the port hold (main.js _renderDroneRunScreen) -->
+    <div id="drone-run-screen" class="overlay-screen" style="display: none;">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <h2 id="drone-run-title">Plan Run</h2>
+                <button id="drone-run-close-btn" class="overlay-close-btn">&times;</button>
+            </div>
+            <div id="drone-run-body"></div>
+        </div>
+    </div>
+
     <div id="cargo-screen" class="overlay-screen" style="display: none;">
         <div class="overlay-card">
             <div class="overlay-header">
@@ -930,6 +991,7 @@
     <script src="system_update.js"></script>
     <script src="repair_manager.js"></script>
     <script src="fabrication.js"></script>
+    <script src="logistics.js"></script>
     <script src="crew_manager.js"></script>
     <script src="comms_nav.js"></script>
     <script src="tour.js"></script>

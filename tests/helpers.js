@@ -69,4 +69,16 @@ async function bringCommsOnline(page) {
     });
 }
 
-module.exports = { test, startNewGame, bringCommsOnline };
+// A new ship sits at Harlow's yard, where everything bought waits at the port
+// for a drone (logistics.js). Berths her at Port Carrow instead, so trade is
+// direct — for specs about buying and selling rather than about drones.
+async function atPort(page) {
+    await page.evaluate(() => {
+        const g = window.game;
+        g.berth  = 'port';
+        g.flight = null;
+        g.updateDisplay();
+    });
+}
+
+module.exports = { test, startNewGame, bringCommsOnline, atPort };

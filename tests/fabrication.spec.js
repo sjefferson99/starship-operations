@@ -2,7 +2,7 @@
 // supplies on the market, fabricating a storage box through the work queue,
 // dosing it, moving solid waste in, composting and selling.
 const { expect } = require('@playwright/test');
-const { test, startNewGame, bringCommsOnline } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline, atPort } = require('./helpers.js');
 
 // Put the player engineer on shift at hour 0 (where a new game's clock is),
 // within normal hours so overwork doesn't slow them down.
@@ -14,14 +14,15 @@ async function engineerAlwaysOnShift(page) {
 }
 
 test.describe('fabrication', () => {
-    test('market sells supplies on the planet; buying needs the local network', async ({ page }) => {
+    test('market sells supplies at the port into a parts box; buying needs the local network', async ({ page }) => {
         await startNewGame(page);
 
         // A new ship's transceiver reaches nothing, so nothing can be bought yet.
         const blocked = await page.evaluate(() => window.game.fabrication.buyBlocker('basicComponents'));
-        expect(blocked).toMatch(/planet/);
+        expect(blocked).toMatch(/out of range/);
 
         await bringCommsOnline(page);
+        await atPort(page);
         await page.evaluate(() => { window.game.credits = 1000; });
         await page.click('#comms-nav-btn');
         await page.evaluate(() => window.game._selectCommsLocation('home'));
@@ -30,9 +31,14 @@ test.describe('fabrication', () => {
         await expect(buyBtn).toBeEnabled();
         await buyBtn.click();
 
-        const state = await page.evaluate(() => ({ n: window.game.fabrication.count('basicComponents'), credits: window.game.credits }));
+        const state = await page.evaluate(() => ({
+            n: window.game.fabrication.count('basicComponents'), credits: window.game.credits,
+            box: window.game.fabrication.partsBoxes().map(b => ({ parts: b.parts, fillL: b.fillL })),
+        }));
         expect(state.n).toBe(1);
         expect(state.credits).toBe(1000 - 60);
+        // It went into the empty storage box a new ship has, which is now a parts box.
+        expect(state.box).toEqual([{ parts: { basicComponents: 1 }, fillL: 4 }]);
     });
 
     test('a storage box is fabricated through the work queue, and cancelling refunds components', async ({ page }) => {
@@ -42,8 +48,8 @@ test.describe('fabrication', () => {
         const result = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
             const noParts = fab.fabricateBlocker('storageBox');
-            g.cargo.boxes = []; // the new ship's food box isn't part of this test
-            g.cargo.items.basicComponents = 2;
+            g.cargo.boxes = []; // the new ship's own boxes aren't part of this test
+            fab.storeParts('basicComponents', 2, { force: true }); // a parts box to hold them
 
             const cancelled = fab.queueFabrication('storageBox');
             const afterQueue = fab.count('basicComponents');
@@ -61,16 +67,16 @@ test.describe('fabrication', () => {
         expect(result.noParts).toMatch(/basic component/);
         expect(result.afterQueue).toBe(1);
         expect(result.afterCancel).toBe(2);
-        expect(result.midway.boxes).toBe(0);
+        expect(result.midway.boxes).toBe(1); // just the parts box
         expect(result.midway.left).toBeCloseTo(1, 5);
-        expect(result.boxes).toBe(1);
+        expect(result.boxes).toBe(2);
         expect(result.queue).toBe(0);
         expect(result.parts).toBe(1);
     });
 
     test('fabrication shows in the Work Queue and the box adds to ship capacity', async ({ page }) => {
         await startNewGame(page);
-        await page.evaluate(() => { window.game.cargo.items.basicComponents = 1; window.game.updateDisplay(); });
+        await page.evaluate(() => { window.game.fabrication.storeParts('basicComponents', 1); window.game.updateDisplay(); });
 
         const before = await page.evaluate(() => window.game._computeShipCapacity().usedVolumeM3);
         await page.click('#repair-queue-btn');
@@ -79,15 +85,15 @@ test.describe('fabrication', () => {
         await expect(page.locator('#repair-queue-list .task-card-fabricate .task-title')).toContainText('Storage Box');
 
         const after = await page.evaluate(() => window.game._computeShipCapacity().usedVolumeM3);
-        // The component (0.02 m³) leaves the hold; the box being made (0.08 m³) is reserved.
-        expect(after - before).toBeCloseTo(0.06, 5);
+        // The component leaves its box (which stays, empty); the box being made (0.08 m³) is reserved.
+        expect(after - before).toBeCloseTo(0.08, 5);
     });
 
     test('fabricating is refused when the box would not fit', async ({ page }) => {
         await startNewGame(page);
         const blocker = await page.evaluate(() => {
             const g = window.game;
-            g.cargo.items.basicComponents = 1;
+            g.fabrication.storeParts('basicComponents', 1);
             g.shipClass.defaultSystems.volumeM3 = g._computeShipCapacity().usedVolumeM3 + 0.01;
             return g.fabrication.fabricateBlocker('storageBox');
         });
@@ -97,12 +103,13 @@ test.describe('fabrication', () => {
     test('compost lifecycle: dose, move solids, seal, compost, sell', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page);
 
         const r = await page.evaluate(() => {
             const g = window.game, fab = g.fabrication;
-            g.cargo.boxes = []; // the new ship's food box isn't part of this test
+            g.cargo.boxes = []; // the new ship's own boxes aren't part of this test
             g.cargo.boxes.push({ id: 'box-test', kind: null, fillL: 0, sealed: false, compostHours: 0 });
-            g.cargo.items.compostingAgent = 1;
+            g.cargo.boxes.push({ id: 'box-agent', kind: 'parts', parts: { compostingAgent: 1 }, fillL: 1, sealed: false, compostHours: 0 });
             const black = g.systems.blackWater;
             black.liquidL = 10; black.solidL = 30; g.syncBlackWaterLevel();
 
@@ -172,6 +179,7 @@ test.describe('fabrication', () => {
     test('finished compost can be sold from the Comms & Nav market', async ({ page }) => {
         await startNewGame(page);
         await bringCommsOnline(page);
+        await atPort(page);
         await page.evaluate(() => {
             const g = window.game;
             g.credits = 0;
@@ -192,21 +200,21 @@ test.describe('fabrication', () => {
         expect(r.box).toMatchObject({ kind: null, fillL: 0, sealed: false });
     });
 
-    test('selling needs a planet with the local network in range', async ({ page }) => {
+    test('selling needs the local network in range', async ({ page }) => {
         await startNewGame(page);
         const blocker = await page.evaluate(() => {
             const g = window.game;
             g.cargo.boxes.push({ id: 'box-r', kind: 'compost', fillL: 10, sealed: true, compostHours: 72 });
             return g.fabrication.sellBlocker('box-r');
         });
-        expect(blocker).toMatch(/planet/);
+        expect(blocker).toMatch(/out of range/);
     });
 
     test('Cargo Hold lists supplies and boxes with their actions', async ({ page }) => {
         await startNewGame(page);
         await page.evaluate(() => {
             const g = window.game;
-            g.cargo.items.compostingAgent = 1;
+            g.fabrication.storeParts('compostingAgent', 1); // into the new ship's empty Storage Box 2
             g.cargo.boxes.push({ id: 'box-ui', kind: null, fillL: 0, sealed: false, compostHours: 0 });
         });
         await page.click('#cargo-btn');
@@ -216,15 +224,28 @@ test.describe('fabrication', () => {
         await page.click('[data-fab-action="dose"][data-box-id="box-ui"]');
         await expect(page.locator('.cargo-box[data-box-id="box-ui"] .task-title')).toContainText('taking solid waste');
         await expect(page.locator('[data-fab-action="seal"][data-box-id="box-ui"]')).toBeDisabled();
+
+        // Tip Out only appears once the compost is finished.
+        await expect(page.locator('[data-fab-action="emptyBox"][data-box-id="box-ui"]')).toHaveCount(0);
+        expect(await page.evaluate(() => window.game.fabrication.emptyBox('box-ui'))).toBe(false);
+        await page.evaluate(() => {
+            const g = window.game, box = g.cargo.boxes.find(b => b.id === 'box-ui');
+            Object.assign(box, { fillL: 20, sealed: true, compostHours: g.fabrication.COMPOST_HOURS });
+            g.updateDisplay();
+        });
+        await expect(page.locator('.cargo-box[data-box-id="box-ui"] .task-title')).toContainText('Compost ready');
+        await page.click('[data-fab-action="emptyBox"][data-box-id="box-ui"]');
+        await expect(page.locator('.cargo-box[data-box-id="box-ui"] .task-title')).toContainText('Empty');
     });
 
     test('cargo and fabrication jobs survive a save and load', async ({ page }) => {
         await startNewGame(page);
         const before = await page.evaluate(async () => {
             const g = window.game;
-            g.cargo.items.basicComponents = 3;
-            g.cargo.items.compostingAgent = 2;
-            g.cargo.boxes.push({ id: 'box-p', size: 'standard', kind: 'compost', fillL: 12.5, sealed: true, compostHours: 10, module: null });
+            g.fabrication.storeParts('basicComponents', 3);
+            g.fabrication.storeParts('compostingAgent', 2);
+            g.fabrication.storeParts('precisionComponents', 1);
+            g.cargo.boxes.push({ id: 'box-p', size: 'standard', kind: 'compost', fillL: 12.5, sealed: true, compostHours: 10, module: null, parts: null });
             g.fabrication.queueFabrication('storageBox');
             await g.saveGame();
             return { cargo: JSON.parse(JSON.stringify(g.cargo)), fab: g.repairQueue.filter(t => t.kind === 'fabricate').map(t => ({ ...t })) };
@@ -254,6 +275,23 @@ test.describe('fabrication', () => {
             GameState.restore(g, world, ships);
             return g.cargo;
         });
-        expect(cargo).toEqual({ items: { basicComponents: 0, compostingAgent: 0 }, boxes: [] });
+        expect(cargo).toEqual({ items: {}, boxes: [] });
+    });
+
+    test('a save from before parts boxes has its loose supplies packed into boxes', async ({ page }) => {
+        await startNewGame(page);
+        const r = await page.evaluate(() => {
+            const g = window.game, fab = g.fabrication;
+            const world = GameState.snapshot(g);
+            const ships = GameState.shipInstanceSnapshot(g);
+            // As an older save had it: supplies loose, every box full of food.
+            ships.ships[0].cargo = { items: { basicComponents: 3, compostingAgent: 1 }, boxes: [
+                { id: 'old-food', size: 'standard', kind: 'food', fillL: 12, sealed: false, compostHours: 0, module: null },
+            ] };
+            GameState.restore(g, world, ships);
+            return { basic: fab.count('basicComponents'), agent: fab.count('compostingAgent'),
+                     kinds: fab.boxes().map(b => b.kind), items: g.cargo.items };
+        });
+        expect(r).toEqual({ basic: 3, agent: 1, kinds: ['food', 'parts'], items: {} });
     });
 });
