@@ -420,7 +420,7 @@ class SoundManager {
         // These make their own sound (a sample, or the on/off confirmation).
         if (el.classList.contains('sound-test-btn') || el.id === 'sound-enabled-toggle') return;
 
-        if (el.id === 'comms-nav-btn') return this.play('comms');
+        if (el.id === 'comms-nav-btn' || el.id === 'comms-nav-header-btn') return this.play('comms');
         if (el.classList.contains('overlay-close-btn') || el.id === 'resume-btn') return this.play('close');
         if (el.classList.contains('toggle-btn') && el.id !== 'blackwater-dump-btn') {
             return this.play(el.classList.contains('btn-on') ? 'switchOff' : 'switchOn');
@@ -462,6 +462,7 @@ class SoundManager {
             dronesHome: g.logistics.drones().filter(d => g.logistics.isHome(d)).length,
             flying: g.logistics.isFlying(),
             food: g.fabrication.rationsAboard(),
+            fuel: s.fuel.current,
             stored: (g.cargo?.boxes ?? []).filter(b => b.module).length,
             swaps: g.fabrication.swapCount,
             boxes: (g.cargo?.boxes ?? []).length,
@@ -519,6 +520,7 @@ class SoundManager {
         if (now.stock < prev.stock && now.credits < prev.credits) this.play('purchase');
         if (now.supplies > prev.supplies && now.credits < prev.credits) this.play('purchase');
         if (now.food - prev.food > 0.5 && now.credits < prev.credits) this.play('purchase');
+        if (now.fuel - prev.fuel > 0.5 && now.credits < prev.credits) this.play('purchase'); // fuel bought at the port
         if ((now.held > prev.held || now.drones > prev.drones) && now.credits < prev.credits) this.play('purchase');
         if (now.drones === prev.drones && now.dronesHome > prev.dronesHome) this.play('droneHome');
         if (now.flying && !prev.flying) this.play('liftOff');

@@ -29,6 +29,8 @@ const test = base.test.extend({
         await page.addInitScript(() => {
             localStorage.setItem('starshipOps.tourSeen', '1');
             localStorage.setItem('starshipOps.tipsOff', '1');
+            // Story pages (e.g. first landing at the port) would cover the dashboard too.
+            localStorage.setItem('starshipOps.storiesOff', '1');
         });
 
         await use(page);
@@ -81,4 +83,13 @@ async function atPort(page) {
     });
 }
 
-module.exports = { test, startNewGame, bringCommsOnline, atPort };
+// Pause menu → Main Menu. With play since the last save the game asks, in its
+// own dialog, whether to save first: leave without saving.
+async function quitToMenu(page) {
+    await page.keyboard.press('Escape');           // opens the pause menu
+    await page.click('#main-menu-btn');             // returnToMainMenu()
+    await page.click('#quit-discard-btn');
+    await page.waitForSelector('#launch-screen', { state: 'visible' });
+}
+
+module.exports = { test, startNewGame, bringCommsOnline, atPort, quitToMenu };

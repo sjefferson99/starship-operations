@@ -9,6 +9,9 @@
 //
 //   Anchor.attach(el, target)   target: an element, a CSS selector, or a
 //                               function returning either (re-resolved each frame)
+//   Anchor.attach(el, target, { below: '.game-header' })
+//                               always below `below` too (it still points at the
+//                               target) — to keep clear of the controls around it
 //   Anchor.detach(el)
 //
 // The callout gets `position: fixed` (class `anchored`), sits below its target
@@ -16,9 +19,9 @@
 // target's centre is. A callout whose target isn't on screen is hidden with it.
 
 class Anchor {
-    static attach(el, target, { gap = 10, margin = 8 } = {}) {
+    static attach(el, target, { gap = 10, margin = 8, below = null } = {}) {
         if (!el) return;
-        Anchor._items.set(el, { target, gap, margin });
+        Anchor._items.set(el, { target, gap, margin, clear: below });
         el.classList.add('anchored');
         Anchor._place(el);
         Anchor._run();
@@ -45,11 +48,13 @@ class Anchor {
         const vw = document.documentElement.clientWidth, vh = window.innerHeight;
         const w  = el.offsetWidth, h = el.offsetHeight;
         const { gap, margin } = item;
+        const clearEl = item.clear ? Anchor._resolve(item.clear) : null;
+        const bottom  = clearEl ? Math.max(r.bottom, clearEl.getBoundingClientRect().bottom) : r.bottom;
 
         const centre = r.left + r.width / 2;
         const left   = Math.max(margin, Math.min(vw - w - margin, centre - w / 2));
-        const below  = r.bottom + gap + h <= vh - margin || r.top - gap - h < margin;
-        const top    = below ? r.bottom + gap : r.top - gap - h;
+        const below  = !!clearEl || bottom + gap + h <= vh - margin || r.top - gap - h < margin;
+        const top    = below ? bottom + gap : r.top - gap - h;
 
         el.style.left = left + 'px';
         el.style.top  = top + 'px';

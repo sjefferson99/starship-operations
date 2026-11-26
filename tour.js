@@ -175,7 +175,7 @@ class Tour {
                 title: 'Passing the time',
                 target: '.speed-controls',
                 enter: closeCrew,
-                body: `<p>Time has been standing still during this tour, and stops again whenever a tip is on screen. Once it's running, repairs take hours of ship time: use the speed buttons to fast-forward, and drop back to 1× when something needs attention.</p>
+                body: `<p>Time has been standing still during this tour, and stops again whenever a tip is on screen. Once it's running, repairs take hours of ship time: use the speed buttons to fast-forward, and drop back to 1× when something needs attention. Tick <strong>1× on notification</strong> and it drops back by itself whenever something new is listed.</p>
                        <p>From here, <strong>tips</strong> will point out what to do as things happen — next up, switching the transceiver on once it's fixed. <strong>Esc</strong> pauses and saves; the <strong>Tour</strong> button replays this.</p>`,
             },
         ];
@@ -195,8 +195,11 @@ class Tour {
         const isDestroyed  = sys => sys.destroyed;
         const isGamble     = sys => !sys.destroyed && pct(sys) < 20;
         const isJuryRigged = sys => sys.juryRigged && !sys.destroyed;
-        const isSliding    = sys => !sys.destroyed && pct(sys) < 50 && pct(sys) >= 40;
+        // Well clear of the 50% boundary, so it isn't sprung on a module that has just
+        // been repaired to 50% and worn a fraction under it.
+        const isSliding    = sys => !sys.destroyed && pct(sys) < 45 && pct(sys) >= 40;
         const isRunning    = (sys, key) => sys.active && key !== 'transceiver';
+        const lifeSupportOff = g => ['o2', 'co2'].filter(k => { const s = g.systems[k]; return !s.active && !s.destroyed && s.installed !== false; });
 
         return [
             {
@@ -206,6 +209,14 @@ class Tour {
                 when: g => (g.systems.power.powerFraction ?? 1) < 1 && (g.systems.power.demandW ?? 0) > 0,
                 body: `<p>The battery can't supply what's switched on, so those systems have slowed or stopped — look for <strong>NO POWER</strong> on their cards.</p>
                        <p>Switch off what you can spare, and get the generator repaired, fuelled and running to recharge.</p>`,
+            },
+            {
+                id: 'vents-closed',
+                title: 'Vents closed — switch on life support',
+                target: g => lifeSupportOff(g).includes('o2') ? '#card-o2' : '#card-co2',
+                when: g => !g.ventsOpen && lifeSupportOff(g).length > 0 && g.gameTime > 0,
+                body: `<p>With the vents shut, no fresh air comes in: the crew use up the oxygen and breathe out CO₂ with nothing to replace or remove them.</p>
+                       <p>Switch on the <strong>O₂ generator</strong> and the <strong>CO₂ scrubber</strong> — their switches glow while they're needed — or open the vents again while you're still on the ground.</p>`,
             },
             {
                 id: 'black-full',
@@ -256,17 +267,18 @@ class Tour {
                 title: 'The local market is in range',
                 target: '#comms-nav-btn',
                 when: g => g.commsNav.hasLocalDetails() && g.systems.waterMaker.installed === false,
-                body: `<p>Click <strong>Open Comms &amp; Nav</strong> here on the Transceiver card and select your current location to see what's for sale.</p>
-                       <p>Buy a <strong>transfer drone</strong> first: from the yard, nothing you buy reaches the ship without one. It flies itself over, charged — but with only enough charge for <strong>one round trip</strong> until you build it a dock.</p>
-                       <p>So order its first load at the same time: a <strong>water maker</strong> (salvage, 100–200 credits by condition — one below 20% is cheapest, but repairing it is a gamble that can destroy it), one <strong>composting agent</strong> and a case of <strong>food</strong>. That's 35 kg — exactly one drone load.</p>`,
+                body: `<p>Click <strong>Comms &amp; Nav</strong> (in the header, or on the Transceiver card) and select your current location to see what's for sale.</p>
+                       <p>Buy a <strong>transfer drone</strong> first: from the yard, nothing you buy reaches the ship without one. It can't bring anything on its way over — it flies itself here on a small disposable battery pack, so it arrives with its own battery <strong>fully charged</strong>.</p>
+                       <p>That full battery is enough for <strong>one round trip</strong> to the port until you build it a dock to recharge on — so once it's here, you'll plan that first run carefully.</p>`,
             },
             {
                 id: 'drone-arrived',
-                title: 'Your drone is here — plan its first run',
+                title: 'Your drone is here — order and plan its first run',
                 target: '#card-drone',
-                when: g => g.logistics.drones().some(d => g.logistics.isHome(d)) && !g.droneDocks && g.systems.waterMaker.installed === false,
-                body: `<p>It carries 35 kg a run to and from Port Carrow, about two and a half hours there and back. What you buy waits at the port until a run brings it: press <strong>Plan Run</strong> to choose what comes back, then <strong>Send to Port</strong>.</p>
-                       <p>Make this run count — it's the only one the drone has charge for until there's a dock. Plan the <strong>water maker</strong>, the <strong>composting agent</strong> and the <strong>food</strong>: a full 35 kg. If you haven't ordered them yet, do that first in Comms &amp; Nav.</p>`,
+                when: g => g.logistics.drones().some(d => g.logistics.isWithShip(d)) && !g.droneDocks && g.systems.waterMaker.installed === false,
+                body: `<p>It carries 35 kg a run to and from Port Carrow, about two and a half hours there and back, and it's fully charged — but that charge is the only round trip it has until there's a dock. Make it count.</p>
+                       <p><strong>1. Order</strong> in Comms &amp; Nav: a <strong>water maker</strong> (salvage, 100–200 credits by condition — one below 20% is cheapest, but repairing it is a gamble that can destroy it), one <strong>composting agent</strong> and a case of <strong>food</strong>. They wait at the port.</p>
+                       <p><strong>2. Plan Run</strong> on this card: add all three — exactly 35 kg — then <strong>Send to Port</strong>.</p>`,
             },
             {
                 id: 'strip-drives',
@@ -295,7 +307,7 @@ class Tour {
                 id: 'drone-low',
                 title: 'The drone needs charging',
                 target: '#card-drone',
-                when: g => g.logistics.drones().some(d => g.logistics.isHome(d) && (d.chargeWh ?? 0) < g.logistics.roundTripWh()),
+                when: g => g.logistics.drones().some(d => g.logistics.isWithShip(d) && (d.chargeWh ?? 0) < g.logistics.roundTripWh(d)),
                 body: `<p>A drone won't set out without charge for the whole round trip, and it can only charge on a <strong>drone dock</strong> — build one from stripped parts if you haven't. A dock fills it from spare generator power, so it charges faster the more the generator can spare. With no generator running yet, use the drone's <strong>charge from battery</strong> override, and switch it off once the generator is up.</p>`,
             },
             {
@@ -308,19 +320,28 @@ class Tour {
                        <p>Now's the time to fix things up properly: finish repairs, keep an eye on food, and start trading — compost and repaired salvage sell at the port — towards new thrusters.</p>`,
             },
             {
+                id: 'machine-box-build',
+                title: 'Make money on salvage',
+                target: '#repair-queue-btn',
+                when: g => g.droneDocks > 0 && g.systems.waterMaker.installed !== false
+                    && !g.fabrication.machineBoxes().length && !g.repairQueue.some(t => t.recipeKey === 'machineBox'),
+                body: `<p>New thrusters need components, and components need credits. The best earner is salvage: buy a damaged module cheap, repair it, and sell it for up to 750 credits.</p>
+                       <p>For that you need a <strong>Machine Storage Box</strong> to keep it in — fabricate one in the <strong>Work Queue</strong> from 2 basic components (10 hours). Then use <strong>Buy &amp; Store</strong> on the market, and repair it from the Cargo Hold.</p>`,
+            },
+            {
                 id: 'thrusters-plan',
                 title: 'New thrusters',
                 target: '#card-thrusters',
                 when: g => g.droneDocks > 0 && g.systems.thrusters.installed === false && !g.repairQueue.some(t => t.recipeKey === 'thrusters'),
                 body: `<p>New atmospheric thrusters take 10 precision and 12 basic components and three days in the Work Queue. Precision components cost 150 credits at the port, so you'll need to trade first — repair salvage and sell it, sell compost.</p>
-                       <p>The hop to Port Carrow burns 20 L of fuel. Fuel isn't cheap and a drone carries 35 L a run, so get some in before you go. At the port everything comes straight aboard.</p>`,
+                       <p>The hop to Port Carrow burns up to 20 L of fuel — less the lighter she is (the thrusters card shows what it'll take). Fuel isn't cheap and a drone carries 35 L a run, so get some in before you go. At the port everything comes straight aboard.</p>`,
             },
             {
                 id: 'thrusters-ready',
                 title: 'She can fly',
                 target: '#card-thrusters',
                 when: g => g.systems.thrusters.installed !== false && !g.systems.thrusters.destroyed && !g.logistics.atPort() && !g.logistics.isFlying(),
-                body: `<p>The thrusters are fitted. With 20 L of fuel aboard and the drone stowed or docked, <strong>Fly to Port Carrow</strong>.</p>`,
+                body: `<p>The thrusters are fitted. With enough fuel aboard (the thrusters card says how much) and the vents closed, <strong>Fly to Port Carrow</strong>. Bring the drone aboard first if you want it with you — one left outside or out on a run lands back here and waits for you to come back for it.</p>`,
             },
             {
                 id: 'at-port',
@@ -358,7 +379,8 @@ class Tour {
                 target: cardFor(isDestroyed),
                 when: g => !!find(g, isDestroyed),
                 body: `<p>That repair failed and the module is beyond saving. It can't be switched on or repaired again.</p>
-                       <p>The local market sells salvaged replacements: <strong>Buy &amp; Fit</strong> puts one straight in. With a machine storage box you can also keep a spare aboard and swap it in from the Cargo Hold.</p>`,
+                       <p>The local market sells salvaged replacements: <strong>Buy &amp; Fit</strong> puts one straight in. With a machine storage box you can also keep a spare aboard and swap it in from the Cargo Hold.</p>
+                       <p>Meanwhile the wreck still has some use: <strong>Break Down for Parts</strong> on its card has the crew take it apart in the Work Queue for whatever components are still good — maybe a few, maybe none.</p>`,
             },
             {
                 // Shown once things have gone badly wrong — the moment going back is worth knowing about.
@@ -411,18 +433,19 @@ class Tour {
             },
             {
                 id: 'sliding',
-                title: 'This repair just got bigger',
+                title: 'Wear adds up',
                 target: cardFor(isSliding),
-                when: g => !!find(g, isSliding),
-                body: `<p>This module has slipped down a repair stage. Each stage lower takes longer to climb back out of, and output drops with it — below 50% it gives less than 40% of its rating.</p>
-                       <p>A short repair now is cheaper than a long one later.</p>`,
+                when: g => { const f = find(g, isSliding); return !!f && !queued(g, f.key); },
+                body: `<p>This module has worn well below 50%, into the slower <strong>Rebuild</strong> stage — and its output falls fast down here: under 40% of its rating at 50%, less as it goes.</p>
+                       <p>Repair time grows with every point lost, and the stages lower down take longer per point. A short top-up repair now is cheaper than a long one later.</p>`,
             },
             {
                 id: 'running',
                 title: 'Running a module wears it out',
                 target: cardFor(isRunning),
-                when: g => !!find(g, isRunning),
-                body: `<p>A module only wears while it's switched on, so anything you don't need is best left off.</p>
+                // Not on day one: there's plenty to take in then, and the wear only shows after a while.
+                when: g => g.gameTime >= 24 * 3600 && !!find(g, isRunning),
+                body: `<p>A module only wears while it's switched on — watch its repair bar creep down — so anything you don't need is best left off.</p>
                        <p><strong>Maintain at</strong> sets a target: the unit throttles back once it's reached, which saves power too.</p>`,
             },
             {
@@ -448,6 +471,18 @@ class Tour {
                 when: g => g.crewManifest.some(m => !m.dead && m.health < g.crewManager.WARNING_THRESHOLD),
                 body: `<p>The crew counter turns amber, then red, as health falls. Open <strong>Crew</strong>: “Active Health Impacts” lists every cause and how fast it's hurting.</p>
                        <p>Unwell crew work slower, so problems compound. Health recovers once the causes are fixed.</p>`,
+            },
+            {
+                id: 'rationing-off',
+                title: 'You can stop rationing water',
+                target: '#card-freshwater',
+                when: g => {
+                    const f = g.systems.freshWater, w = g.systems.waterMaker;
+                    if (!f.rationing || w.installed === false || w.destroyed || !w.active || (w.outputLhr ?? 0) <= 0) return false;
+                    return (f.rationHours ?? 0) < g.crewManager.WATER_RATION_GRACE_HOURS || !g._rationResetBlocker();
+                },
+                body: `<p>The water maker is running and the tank can cover it, so you can come off rationing: press <strong>Disable Rationing</strong> on the Fresh Water card.</p>
+                       <p>After a day on short rations it costs a one-off drink of 50 L per person, which ends up in the black water tank — keep an eye on both tanks for a while afterwards.</p>`,
             },
             {
                 id: 'ration-strain',

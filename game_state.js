@@ -150,6 +150,8 @@ class GameState {
             plan: (d.plan ?? []).filter(p => p && p.holdId != null && p.qty > 0).map(p => ({ holdId: p.holdId, qty: p.qty })),
             planOut: (d.planOut ?? []).filter(o => o && o.boxId != null).map(o => ({ kind: o.kind === 'compost' ? 'compost' : 'module', boxId: o.boxId })),
             cargoOut: (d.cargoOut ?? []).map(e => ({ ...e })), cargoIn: (d.cargoIn ?? []).map(e => ({ ...e })),
+            // Where it flies back to. Older saves had every drone wherever the ship was.
+            base: d.base === 'port' || d.base === 'yard' ? d.base : game.berth,
         }));
         game.portHold = (saved.portHold ?? []).map(e => ({ ...e }));
     }

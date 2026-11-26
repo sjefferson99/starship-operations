@@ -11,6 +11,11 @@
 // Switching vents on and off is not listed: it's the player's own click, heard
 // as a switch, not news.
 //
+// "1× on notification" (the header checkbox, a viewing preference kept in
+// localStorage): when a tick lists something new, game speed drops back to 1×
+// (main.js calls slowIfWanted() after each tick). Entries the player's own
+// clicks produce don't — only what happens while time runs.
+//
 // The list is game state: it's saved with the game (world.notifications, the
 // `notifications` table in db.js) and restored by GameState.restore, so going
 // back on the Timeline shows the list as it was at that point.
@@ -22,6 +27,9 @@ class Notifications {
         this.MAX  = 100;       // oldest entries drop off beyond this
         this._prev = null;     // last state snapshot (null = nothing to compare against yet)
         this._version = 0;     // bumped on every change, so the panel only redraws when needed
+        this.addedCount = 0;   // entries added this page session — main.js compares it across a tick
+        this.SLOW_KEY = 'starshipOps.slowOnNews';
+        this.slowOnNews = this._loadPref();
 
         this.RANK = { Normal: 0, Warning: 1, Critical: 2 };
         this.STATUS_LABELS = {
@@ -63,6 +71,7 @@ class Notifications {
         }
         this.list.unshift(entry);
         if (this.list.length > this.MAX) this.list.length = this.MAX;
+        this.addedCount++;
         this._changed();
         return entry;
     }
@@ -94,6 +103,22 @@ class Notifications {
         }));
         this._prev = null;
         this._changed();
+    }
+
+    // ── 1× on notification ──────────────────────────────────────────────────
+
+    _loadPref() {
+        try { return localStorage.getItem(this.SLOW_KEY) === '1'; } catch { return false; }
+    }
+
+    setSlowOnNews(on) {
+        this.slowOnNews = !!on;
+        try { localStorage.setItem(this.SLOW_KEY, this.slowOnNews ? '1' : '0'); } catch { /* not remembered */ }
+    }
+
+    // Something new was listed during a tick: back to 1×, if that's wanted.
+    slowIfWanted() {
+        if (this.slowOnNews && this.game.gameSpeed > 1) this.game.setGameSpeed(1);
     }
 
     snapshot() {
@@ -134,6 +159,7 @@ class Notifications {
             droneUnits: g.logistics.drones().map(d => ({ id: d.id, label: g.logistics.droneLabel(d), pct: d.repairPct ?? 100 })),
             boxes,
             food: fab.rationsAboard(),
+            fuel: s.fuel.current,
             swaps: fab.swapCount,
             blackWater: s.blackWater.current,
             credits: g.credits,
@@ -242,7 +268,7 @@ class Notifications {
             const before = prev.modules[key];
             if (!before) return;
             const name = this.MODULE_LABELS[key] ?? key;
-            const fitted = (mod.installed && !before.installed) || (before.destroyed && !mod.destroyed);
+            const fitted = mod.installed && (!before.installed || (before.destroyed && !mod.destroyed));
             if (fitted) {
                 if (bought.length) return; // listed as the purchase above
                 this.add({ key: `module:${key}`, level: 'good', title: `${name} fitted`, detail: `In ${Math.round(mod.pct)}% condition.` });
@@ -268,9 +294,11 @@ class Notifications {
                 .filter(x => x.n > 0);
             const rations = now.food - prev.food;
             if (rations > 0.5) bought.push({ item: 'food', n: Math.round(rations) });
+            const fuelL = now.fuel - prev.fuel;
+            if (fuelL > 0.5) bought.push({ item: 'fuel', n: Math.round(fuelL) });
             if (bought.length) {
                 const nameOf = item => (item === 'food' ? g.fabrication.FOOD.name : g.fabrication.ITEMS?.[item]?.name ?? item);
-                const names = bought.map(({ item, n }) => `${n} × ${nameOf(item)}`).join(', ');
+                const names = bought.map(({ item, n }) => (item === 'fuel' ? `${n} L of fuel` : `${n} × ${nameOf(item)}`)).join(', ');
                 this.add({ level: 'info', title: 'Supplies bought', detail: `${names} — ${spent} credits.` });
             }
         }
@@ -296,7 +324,7 @@ class Notifications {
             if (swapped || !b.module || !before.module) return;
             const name = this.MODULE_LABELS[b.module.key] ?? b.module.key;
             if (b.module.destroyed && !before.module.destroyed) {
-                this.add({ key: `stored:${b.id}`, level: 'warning', title: `Stored ${name} destroyed`, detail: `The repair failed. It is only worth scrap now.` });
+                this.add({ key: `stored:${b.id}`, level: 'warning', title: `Stored ${name} destroyed`, detail: `The repair failed. Sell it for scrap, or break it down for parts.` });
             } else if (b.module.pct - before.module.pct >= 5) {
                 this.add({ key: `stored:${b.id}`, level: 'good', title: `Stored ${name} repaired to ${Math.round(b.module.pct)}%`, detail: b.label });
             }

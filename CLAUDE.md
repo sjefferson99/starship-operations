@@ -34,12 +34,12 @@ plain instance properties, and `GameState`, `SystemUpdate`, `RepairManager`, `Cr
 changing state shape, grep for every reader, don't assume one file owns a field.
 
 **The tick loop is the heart of the simulation** (`main.js`'s `_startTimer`): every real second,
-if not paused, `gameTime` advances by `gameSpeed` (1/10/100/1000×) and that same value is passed
+if not paused, `gameTime` advances by `gameSpeed` (1/10/100/1000/10000×) and that same value is passed
 as `dt` (game-seconds elapsed) into `SystemUpdate.update(dt)`, which runs O2 → CO2 →
 transceiver → food (eating) → water (incl. water maker) → power/fuel → crew health → repair decay → work-queue
 processing → composting → status thresholds, in that fixed order (preceded by the power-budget calculation
 described below), then `main.js` does a full imperative DOM re-render (no diffing). Because `dt` can be
-as large as 1000 at high speed, any new per-tick calculation needs to be safe against one huge
+as large as 10000 at high speed, any new per-tick calculation needs to be safe against one huge
 step — see the CO2-vent-overshoot fix in `system_update.js` for the pattern (clamp to the
 equilibrium target instead of letting a big tick blow through it).
 
@@ -152,7 +152,7 @@ machine box for that drone's inbound plan (`roomAboardFor(entry, drone)`), which
 swapped for another in one run. The port takes in new drone-sized salvage at `CommsNav.RESTOCK_HOURS`, up to
 `RESTOCK[].max` of each kind (`CommsNav.update`, found from `gameTime`, rolls on `game.rng`), and
 `_tidyPlans` keeps plans in step with the hold. A run (`launch`) needs charge for the round trip and a plan
-(or, from `sendForSale`, something to sell), and spends charge and wear per km; at the port it sells `cargoOut`,
+(or, from `sendForSale`, something to sell), and spends charge and wear per km — charge per km scales with the load on that leg (`droneWhPerKm`: `whPerKm` is fully loaded, falling to the drone's own mass empty); at the port it sells `cargoOut`,
 puts any undelivered `cargoIn` back in the hold, loads exactly the plan (splitting a part-planned order), and on
 return `_deliver` puts what fits aboard — the rest stays in `cargoIn` and is retried each tick. One huge
 tick can run a whole trip (`_updateDrone` loops through the legs). Drones are repair units
@@ -160,8 +160,10 @@ tick can run a whole trip (`_updateDrone` loops through the legs). Drones are re
 fabricated) charge docked drones from spare generator output only, before the battery tops up, never from
 the battery — unless that drone's **charge from battery** switch (`chargeFromBattery`) is on, when the shortfall comes from the battery down to `DOCK_BATTERY_FLOOR_PCT` (20%). Computed in `SystemUpdate._updatePowerAndFuel` (`power.dockW`, of which `dockBatteryW` from the battery). **Stripping** a wrecked drive
 (`queueStrip`, needs box room for its `STRIP` yield) removes it and yields components; new atmospheric
-thrusters are a recipe. `fly(to)` needs fitted thrusters, `hopFuelL`, and every drone aboard;
-`game.flight` counts down and lands her (`_updateFlight`); at the port the hold is delivered straight
+thrusters are a recipe. `fly(to)` needs fitted thrusters, closed vents and `hopFuelL()` (`fuelPerHopL` at maximum laden mass, scaled by her
+current mass); the fuel burns over the flight (`flight.fuelL`), not at lift-off. Drones not aboard stay behind: each
+has a `base` berth it flies back to, waits there (`isLeftBehind`; only `isWithShip` drones can launch, dock or be
+repaired) and is collected when she lands there (`_collectWaitingDrones`). `game.flight` counts down and lands her (`_updateFlight`); at the port the hold is delivered straight
 aboard each tick. `main.js _syncBackground` sets the background from the berth (city / port / flight, the
 last animated). Persisted in `ship_logistics`, `drones` (loads as JSON) and `port_hold`; a payload
 without logistics starts at the yard with the drives wrecked.
@@ -235,6 +237,24 @@ and read by the dashboard — the seed itself is kept only for display, generati
 from it after creation. The dashboard renders two orthographic plane views (Top X/Y, Side X/Z) as
 plain inline SVG rather than attempting true 3D — there's no rendering library in this codebase
 and a hand-rolled 3D projection wasn't worth the payoff for three points.
+
+**Story pages** (`data/story_messages.json`, beyond the New Game intro) are shown by `main.js _showStory(id)` —
+once per save (localStorage), holding the clock while open; first landing at the port shows `port-arrival`
+(`onLanded`, called by Logistics). The test fixture sets `starshipOps.storiesOff`.
+
+**Leaving for the main menu** goes through the in-game `#quit-confirm` dialog (Save & Quit / Quit Without Saving),
+skipped when the game was saved since pausing (`_savedWhilePaused`) or is over. Specs use `quitToMenu(page)` from
+`tests/helpers.js`. **"1× on notification"** (header checkbox, localStorage) drops the speed back to 1× when a tick lists
+something new (`Notifications.slowIfWanted()`).
+
+**Breaking down a wreck** is a Work Queue job like stripping the drives: `kind: 'strip'` with `recipeKey` =
+the unit key (`'o2'` in place, or `'box:<id>'`), told apart from a drive strip by
+`Fabrication.isBreakDownTask` (its key isn't in `Logistics.STRIP`). Yields are rolled on completion
+(`Fabrication.BREAKDOWN`); a fitted wreck leaves its slot `installed: false`, which the core module cards
+show as NOT FITTED until a replacement is bought.
+
+**The header is fixed; only the dashboard scrolls** (`.game-container` is a full-height flex column shown
+with `display: flex`, `.game-main` scrolls). Measure layout relative to `.game-main`, not the window.
 
 **Tips share the tour's card.** `Tour._buildTips()` is a priority-ordered list of
 `{id, when(game), target, title, body}`; `checkTips()` runs once per tick from `main.js` and shows

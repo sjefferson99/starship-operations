@@ -2,7 +2,7 @@
 // roster (current location + trading post + comms signal), the list/selection
 // UI, distance display, and persistence across save/reload.
 const { expect } = require('@playwright/test');
-const { test, startNewGame, bringCommsOnline } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline, quitToMenu } = require('./helpers.js');
 
 test.describe('comms & nav', () => {
     test('opens with Kel Veth III marked current and two other charted entries', async ({ page }) => {
@@ -58,10 +58,7 @@ test.describe('comms & nav', () => {
         const before = await page.evaluate(() => ({ seed: window.game.commsSeed, locations: window.game.commsLocations }));
 
         await page.evaluate(() => window.game.saveGame());
-        page.once('dialog', d => d.accept());
-        await page.keyboard.press('Escape');
-        await page.click('#main-menu-btn');
-        await page.waitForSelector('#launch-screen', { state: 'visible' });
+        await quitToMenu(page);
 
         await page.click('#load-game-btn');
         await page.waitForSelector('#save-list .save-card', { timeout: 5000 });
@@ -126,10 +123,7 @@ test.describe('sector seed screen', () => {
         await page.goto('/');
         const first = await newGameWithSeed();
 
-        page.once('dialog', d => d.accept()); // confirm() inside returnToMainMenu
-        await page.keyboard.press('Escape');
-        await page.click('#main-menu-btn');
-        await page.waitForSelector('#launch-screen', { state: 'visible' });
+        await quitToMenu(page);
 
         const second = await newGameWithSeed();
 

@@ -13,10 +13,16 @@
 //
 // State (all saved — see GameState / db.js):
 //   game.berth      'yard' | 'port'      where she's set down (or flying from)
-//   game.flight     { to, hoursLeft, totalHours } while in the air, else null
+//   game.flight     { to, hoursLeft, totalHours, fuelL } while in the air, else
+//                   null. fuelL is the hop's whole fuel bill, burnt evenly over
+//                   the flight (worked out from the ship's mass at lift-off)
 //   game.droneDocks number of drone docks fitted
 //   game.drones     [{ id, tier, repairPct, juryRigged, destroyed, chargeWh,
-//                      chargeFromBattery, plan, planOut, state, hoursLeft, cargoOut, cargoIn }]
+//                      chargeFromBattery, plan, planOut, state, hoursLeft, cargoOut, cargoIn, base }]
+//                   base: the berth ('yard' | 'port') a drone outside the ship flies
+//                   back to — where the ship was when it left. The ship may have
+//                   flown on meanwhile: the drone lands there anyway and waits,
+//                   and the ship has to go back for it. Aboard, it goes where she does.
 //                   planOut: [{ kind: 'module' | 'compost', boxId }] — what the next
 //                   run takes to the port to sell, loaded out of its box at launch
 //                   state: 'arriving' (bought, flying itself over) | 'outbound'
@@ -74,10 +80,41 @@ class Logistics {
     dockSpec(field) {
         return this._spec('droneDock', field, { massKg: 15, volumeM3: 0.15, chargeW: 120 }[field]);
     }
-    hopFuelL()     { return this._spec('thrusters', 'fuelPerHopL', 20); }
     hopHours()     { return this.YARD_TO_PORT_KM / this._spec('thrusters', 'cruiseKmh', 400); }
     droneLegHours(){ return this.YARD_TO_PORT_KM / this.droneSpec('speedKmh'); }
-    roundTripWh()  { return 2 * this.YARD_TO_PORT_KM * this.droneSpec('whPerKm'); }
+
+    // Fuel for a hop scales with the distance and with what she weighs:
+    // fuelPerHopL is the yard → port hop at her maximum laden mass, and it
+    // falls in proportion as she gets lighter (an empty hull uses
+    // unladen / max of it). `km` defaults to the yard → port hop.
+    hopFuelL(km = this.YARD_TO_PORT_KM) {
+        const cap = this.game._computeShipCapacity();
+        const massFactor = cap.maxMassKg > 0 ? cap.totalMassKg / cap.maxMassKg : 1;
+        const fuelL = this._spec('thrusters', 'fuelPerHopL', 20) * massFactor * (km / this.YARD_TO_PORT_KM);
+        return Math.round(fuelL * 10) / 10;
+    }
+
+    // A drone's energy per km follows what it's lifting: whPerKm is the drone
+    // fully loaded (its own mass plus payloadKg), falling in proportion to its
+    // all-up mass, down to just its own mass when it flies empty.
+    droneWhPerKm(cargoKg = 0) {
+        const own = this.droneSpec('massKg'), full = own + this.droneSpec('payloadKg');
+        return this.droneSpec('whPerKm') * (own + Math.max(0, cargoKg)) / full;
+    }
+
+    droneLegWh(cargoKg = 0) {
+        return this.YARD_TO_PORT_KM * this.droneWhPerKm(cargoKg);
+    }
+
+    // Energy for a run to the port and back: out with what it takes to sell,
+    // back with what's on its plan. With no drone, the worst case (full both ways).
+    // `outKg` overrides the outbound load (a sale sent from the market).
+    roundTripWh(drone = null, { outKg } = {}) {
+        const payload = this.droneSpec('payloadKg');
+        if (!drone) return 2 * this.droneLegWh(payload);
+        const out = outKg ?? this.planOutMassKg(drone);
+        return this.droneLegWh(out) + this.droneLegWh(this.planMassKg(drone));
+    }
 
     // ── Where the ship is ───────────────────────────────────────────────────
 
@@ -114,6 +151,18 @@ class Logistics {
     isHome(drone)     { return ['parked', 'stowed', 'docked'].includes(drone.state); }
     isAboard(drone)   { return drone.state === 'stowed' || drone.state === 'docked'; }
     isAway(drone)     { return !this.isHome(drone); }
+    // Where a drone is (or is flying back to): aboard, wherever the ship is.
+    droneBase(drone)  { return this.isAboard(drone) ? this.berth() : (drone.base ?? this.berth()); }
+    // Home and somewhere the crew can reach it: aboard, or parked beside her.
+    isWithShip(drone) {
+        if (this.isAboard(drone)) return true;
+        return drone.state === 'parked' && !this.isFlying() && this.droneBase(drone) === this.berth();
+    }
+    // Landed where the ship was, but she's gone on: it waits for her to come back.
+    isLeftBehind(drone) { return drone.state === 'parked' && !this.isWithShip(drone); }
+    _leftBehindNote(drone) {
+        return this.isFlying() ? 'The ship is in the air' : `Waiting at ${this.berthName(this.droneBase(drone))} — fly there to pick it up`;
+    }
     droneKeys()       { return this.drones().map(d => this.unitKey(d)); }
     freeDocks()       { return Math.max(0, (this.game.droneDocks ?? 0) - this.drones().filter(d => d.state === 'docked').length); }
 
@@ -167,7 +216,7 @@ class Logistics {
         const drone = {
             id: this._newId('drone'), tier: 1, repairPct: 100, juryRigged: false, destroyed: false,
             chargeWh: this.droneSpec('batteryWh'), chargeFromBattery: false, plan: [], planOut: [], state: 'arriving',
-            hoursLeft: this.atPort() ? 0 : this.droneLegHours(), cargoOut: [], cargoIn: [],
+            hoursLeft: this.atPort() ? 0 : this.droneLegHours(), cargoOut: [], cargoIn: [], base: this.berth(),
         };
         this.drones().push(drone);
         if (drone.hoursLeft <= 0) this._settleHome(drone);
@@ -176,8 +225,10 @@ class Logistics {
 
     // Where a drone goes on getting back: a free dock, else aboard if there's
     // room, else set down outside.
+    // If the ship has flown on since it left, it lands where she was and waits.
     _settleHome(drone) {
         drone.hoursLeft = 0;
+        if (this.isFlying() || this.droneBase(drone) !== this.berth()) { drone.state = 'parked'; return; }
         if (this.freeDocks() > 0) { drone.state = 'docked'; return; }
         drone.state = 'parked'; // not counted while we ask whether it fits
         drone.state = this._droneSpaceBlocker(drone) ? 'parked' : 'stowed';
@@ -195,6 +246,7 @@ class Logistics {
     dockBlocker(drone) {
         if (!drone || !this.isHome(drone)) return 'Out on a run';
         if (drone.state === 'docked') return 'Already docked';
+        if (this.isLeftBehind(drone)) return this._leftBehindNote(drone);
         if (this.freeDocks() < 1) return (this.game.droneDocks ?? 0) ? 'Every dock is in use' : 'No drone dock — fabricate one in the Work Queue';
         if (drone.state === 'parked') return this._droneSpaceBlocker(drone);
         return null;
@@ -203,6 +255,7 @@ class Logistics {
     stowBlocker(drone) {
         if (!drone || !this.isHome(drone)) return 'Out on a run';
         if (drone.state === 'stowed') return 'Already stowed';
+        if (this.isLeftBehind(drone)) return this._leftBehindNote(drone);
         if (drone.state === 'parked') return this._droneSpaceBlocker(drone);
         return null;
     }
@@ -224,15 +277,17 @@ class Logistics {
 
     // Why this drone can't be sent on a run right now, or null. A run needs a
     // reason: something planned to bring back, or (`forSale`) something to sell.
-    launchBlocker(drone, { forSale = false } = {}) {
+    // `outKg` is the load a sale would send out (see roundTripWh).
+    launchBlocker(drone, { forSale = false, outKg } = {}) {
         if (!drone) return 'No drone';
         if (!this.isHome(drone)) return drone.state === 'arriving' ? 'On its way to you' : 'Out on a run';
         if (this.isFlying()) return 'In flight';
+        if (this.isLeftBehind(drone)) return this._leftBehindNote(drone);
         if (this.atPort()) return 'You\'re at the port — trade directly';
         if (!this.game.commsNav.hasLocalDetails()) return 'Drones fly on the local network — it\'s out of range';
         if (this.game.repairQueue.some(t => t.systemKey === this.unitKey(drone))) return 'Being repaired';
         if ((drone.repairPct ?? 100) < this.MIN_LAUNCH_PCT) return `Below ${this.MIN_LAUNCH_PCT}% condition — repair it first`;
-        const need = this.roundTripWh();
+        const need = this.roundTripWh(drone, { outKg: forSale ? (outKg ?? this.droneSpec('payloadKg')) : undefined });
         if ((drone.chargeWh ?? 0) < need - 1e-6) {
             return `Needs ${Math.round(need)} Wh for the round trip (has ${Math.round(drone.chargeWh ?? 0)}) — dock it to charge`;
         }
@@ -244,16 +299,17 @@ class Logistics {
 
     // The first drone that could go right now with something to sell (it also
     // brings back whatever is on its plan).
-    readyDrone() {
-        return this.drones().find(d => !this.launchBlocker(d, { forSale: true })) ?? null;
+    readyDrone(outKg) {
+        return this.drones().find(d => !this.launchBlocker(d, { forSale: true, outKg })) ?? null;
     }
 
     // Sends a drone to the port and back. `cargoOut` is what it carries to
     // sell; it brings back what's on its plan.
     launch(droneId, cargoOut = []) {
         const drone = this.drone(droneId);
-        if (this.launchBlocker(drone, { forSale: cargoOut.length > 0 })) return false;
+        if (this.launchBlocker(drone, { forSale: cargoOut.length > 0, outKg: this.cargoMassKg(cargoOut) })) return false;
         if (!cargoOut.length) cargoOut = this._loadOut(drone);
+        drone.base      = this.berth(); // where it comes back to
         drone.planOut   = [];
         drone.state     = 'outbound';
         drone.hoursLeft = this.droneLegHours();
@@ -301,12 +357,39 @@ class Logistics {
         return modules + Math.min(compost, Math.max(0, this.droneSpec('payloadKg') - modules));
     }
 
+    // Litres of compost from each box on this drone's outbound plan that will
+    // actually go — modules first, then compost in plan order up to the payload
+    // (as _loadOut takes it). { boxId: litres }
+    planOutCompostLitres(drone) {
+        const fab = this.game.fabrication;
+        let room = this.droneSpec('payloadKg');
+        const out = {};
+        this.planOut(drone).forEach(o => {
+            const box = fab._box(o.boxId);
+            if (o.kind === 'module' && box?.module) room -= fab.moduleMassKg(box.module);
+        });
+        this.planOut(drone).forEach(o => {
+            const box = fab._box(o.boxId);
+            if (o.kind !== 'compost' || !box) return;
+            const litres = Math.max(0, Math.min(box.fillL, room / fab.BOX.contentDensityKgPerL));
+            out[o.boxId] = litres;
+            room -= litres * fab.BOX.contentDensityKgPerL;
+        });
+        return out;
+    }
+
+    // How much of a compost box one drone run can take on its own.
+    compostLitresPerRun(box) {
+        return Math.min(box?.fillL ?? 0, this.droneSpec('payloadKg') / this.game.fabrication.BOX.contentDensityKgPerL);
+    }
+
     planOutAddBlocker(drone, boxId) {
         if (!drone) return 'No drone';
         if (!this.isHome(drone)) return 'Out on a run — plan its next one when it\'s back';
         const item = this.outCandidates().find(o => o.boxId === boxId);
         if (!item) return 'Nothing to send from that box';
         if (this.outPlannedBy(boxId)) return 'Already planned to go';
+        if (this.game.fabrication.breakDownTask(`box:${boxId}`)) return 'Being broken down in the Work Queue';
         const fab  = this.game.fabrication;
         const room = this.droneSpec('payloadKg') - this.planOutMassKg(drone);
         if (item.kind === 'module') {
@@ -616,10 +699,20 @@ class Logistics {
 
     // Selling from the yard: what a drone would carry, or why it can't.
     // `load` is { kind: 'compost' | 'module', boxId }.
+    // What a sale would load: a module whole, compost up to the payload.
+    _saleMassKg(load) {
+        const fab = this.game.fabrication;
+        const box = fab._box(load.boxId);
+        if (!box) return 0;
+        if (load.kind === 'module') return box.module ? fab.moduleMassKg(box.module) : 0;
+        return Math.min(box.fillL * fab.BOX.contentDensityKgPerL, this.droneSpec('payloadKg'));
+    }
+
     saleRunBlocker(load) {
-        const drone = this.readyDrone();
+        const outKg = this._saleMassKg(load);
+        const drone = this.readyDrone(outKg);
         if (!this.drones().length) return 'You need a transfer drone to sell from the yard';
-        if (!drone) return this.launchBlocker(this.drones()[0], { forSale: true }) ?? 'No drone ready';
+        if (!drone) return this.launchBlocker(this.drones()[0], { forSale: true, outKg }) ?? 'No drone ready';
         if (load.kind === 'module') {
             const box = this.game.fabrication._box(load.boxId);
             if (!box?.module) return 'Nothing stored';
@@ -636,7 +729,7 @@ class Logistics {
         if (this.saleRunBlocker(load)) return null;
         const fab   = this.game.fabrication;
         const box   = fab._box(load.boxId);
-        const drone = this.readyDrone();
+        const drone = this.readyDrone(this._saleMassKg(load));
         let entry;
         if (load.kind === 'compost') {
             const litres = Math.min(box.fillL, this.droneSpec('payloadKg') / fab.BOX.contentDensityKgPerL);
@@ -747,22 +840,30 @@ class Logistics {
         const t = this.game.systems.thrusters;
         if (!t || t.installed === false) return 'No atmospheric thrusters fitted';
         if (t.destroyed) return 'The thrusters are wrecked';
-        const away = this.drones().find(d => !this.isHome(d));
-        if (away) return `Wait for ${this.droneLabel(away)} to get back`;
-        const outside = this.drones().find(d => d.state === 'parked');
-        if (outside) return `Bring ${this.droneLabel(outside)} aboard first`;
-        if (this.game.systems.fuel.current < this.hopFuelL() - 1e-9) return `Needs ${this.hopFuelL()} L of fuel`;
+        // She climbs too high for the vents to do any good, and they must be sealed for it.
+        if (this.game.ventsOpen) return 'Close the vents first — she flies too high for them to work';
+        const fuelL = this.hopFuelL();
+        if (this.game.systems.fuel.current < fuelL - 1e-9) return `Needs ${fuelL} L of fuel`;
         return null;
     }
 
+    // Drones away or parked outside don't come along: each lands (or waits)
+    // where she was, and she has to come back for it. Fuel burns as she flies
+    // (_updateFlight), not all at lift-off.
     fly(to) {
         if (this.flyBlocker(to)) return false;
-        const fuel = this.game.systems.fuel;
-        fuel.current = Math.max(0, fuel.current - this.hopFuelL());
-        fuel.level   = (fuel.current / fuel.capacity) * 100;
+        const from = this.berth();
+        this.drones().forEach(d => { if (!this.isAboard(d)) d.base = d.base ?? from; });
         const hours = this.hopHours();
-        this.game.flight = { to, hoursLeft: hours, totalHours: hours };
+        this.game.flight = { to, hoursLeft: hours, totalHours: hours, fuelL: this.hopFuelL() };
         return true;
+    }
+
+    // What's left of the hop's fuel bill.
+    flightFuelLeftL() {
+        const f = this.game.flight;
+        if (!f || !(f.totalHours > 0)) return 0;
+        return (f.fuelL ?? 0) * Math.max(0, f.hoursLeft) / f.totalHours;
     }
 
     // ── Per tick ────────────────────────────────────────────────────────────
@@ -807,7 +908,7 @@ class Logistics {
         this.drones().forEach(d => this._updateDrone(d, hours));
         // Anything still to come aboard: a drone's undelivered load, or the
         // port hold while berthed at the port.
-        this.drones().filter(d => this.isHome(d) && d.cargoIn?.length).forEach(d => { d.cargoIn = this._deliverAll(d.cargoIn); });
+        this.drones().filter(d => this.isWithShip(d) && d.cargoIn?.length).forEach(d => { d.cargoIn = this._deliverAll(d.cargoIn); });
         if (this.atPort() && this.game.portHold?.length) {
             const before = this.game.portHold.map(e => this.entryLabel(e));
             this.game.portHold = this._deliverAll(this.game.portHold);
@@ -820,6 +921,16 @@ class Logistics {
     _updateFlight(hours) {
         const flight = this.game.flight;
         if (!flight) return;
+        // The thrusters burn the hop's fuel evenly over the flight. One huge
+        // tick only burns what's left of the hop, never more.
+        const step = Math.min(hours, Math.max(0, flight.hoursLeft));
+        const fuel = this.game.systems.fuel;
+        if (flight.totalHours > 0 && step > 0) {
+            const rateLhr = (flight.fuelL ?? 0) / flight.totalHours;
+            fuel.current  = Math.max(0, fuel.current - rateLhr * step);
+            fuel.level    = (fuel.current / fuel.capacity) * 100;
+            fuel.consumeRateLhr = (fuel.consumeRateLhr ?? 0) + rateLhr;
+        }
         flight.hoursLeft -= hours;
         if (flight.hoursLeft > 1e-9) return;
         this.game.berth  = flight.to;
@@ -828,6 +939,22 @@ class Logistics {
             key: 'flight', level: 'good', title: `Landed at ${this.berthName()}`,
             detail: this.berth() === 'port' ? 'Trade here is direct — no drone runs needed.' : 'Back at the yard.',
         });
+        this._collectWaitingDrones();
+        this.game.onLanded?.(this.berth());
+    }
+
+    // Landing where drones have been waiting: they come aboard (docked or
+    // stowed if there's room, else they stay parked beside her).
+    _collectWaitingDrones() {
+        const here = this.drones().filter(d => d.state === 'parked' && d.base === this.berth());
+        here.forEach(d => this._settleHome(d));
+        if (here.length) {
+            this._notify({
+                key: 'drone:collected', level: 'good',
+                title: `Picked up ${here.map(d => this.droneLabel(d)).join(', ')}`,
+                detail: here.map(d => `${this.droneLabel(d)}: ${this._whereNote(d)}`).join(' '),
+            });
+        }
     }
 
     // One huge tick can carry a drone through several legs; each is taken in turn.
@@ -845,9 +972,11 @@ class Logistics {
     }
 
     // Charge spent and wear taken over `hours` of flying.
+    // Energy per km follows the load on this leg (droneWhPerKm).
     _fly(drone, hours) {
         const km = hours * this.droneSpec('speedKmh');
-        drone.chargeWh = Math.max(0, (drone.chargeWh ?? 0) - km * this.droneSpec('whPerKm'));
+        const loadKg = this.cargoMassKg(drone.state === 'outbound' ? drone.cargoOut : drone.cargoIn);
+        drone.chargeWh = Math.max(0, (drone.chargeWh ?? 0) - km * this.droneWhPerKm(loadKg));
         const wear = this.droneSpec('wearPctPerKm') * (drone.juryRigged ? this.droneSpec('juryRigWearMultiplier') : 1);
         drone.repairPct = Math.max(0, (drone.repairPct ?? 100) - km * wear);
     }
@@ -906,6 +1035,11 @@ class Logistics {
             return;
         }
         const brought = drone.cargoIn ?? [];
+        if (this.isLeftBehind(drone)) {
+            const what = brought.length ? ` It has ${brought.map(e => this.entryLabel(e)).join(', ')} aboard.` : '';
+            this._notify({ key: 'drone:back', level: 'warning', title: `${this.droneLabel(drone)} landed at ${this.berthName(this.droneBase(drone))}`, detail: `The ship isn't there — fly back to pick it up.${what}` });
+            return;
+        }
         drone.cargoIn = this._deliverAll(brought);
         const what = brought.length ? brought.map(e => this.entryLabel(e)).join(', ') : 'nothing to collect';
         const stuck = drone.cargoIn.length ? ` No room yet for ${drone.cargoIn.map(e => this.entryLabel(e)).join(', ')} — it stays on the drone.` : '';
@@ -913,6 +1047,7 @@ class Logistics {
     }
 
     _whereNote(drone) {
+        if (this.isLeftBehind(drone)) return `Waiting at ${this.berthName(this.droneBase(drone))} for the ship.`;
         return {
             docked: 'Docked and charging.',
             stowed: 'Stowed aboard — it won\'t charge without a dock.',
