@@ -141,10 +141,12 @@ test.describe('transfer drones', () => {
         expect(back.rations).toBe(r.rations + 10);
         expect(back.hold).toBe(1);
         expect(back.drone.state).toBe('stowed');
-        expect(back.drone.chargeWh).toBeCloseTo(1500 - 240 * 5, 3);  // 240 km at 5 Wh/km
+        // 5 Wh/km is the drone fully loaded (22 kg + 35 kg): out empty at 22/57 of
+        // that, back with the full 35 kg at all of it.
+        expect(back.drone.chargeWh).toBeCloseTo(1500 - 120 * 5 * 22 / 57 - 120 * 5, 3);
         expect(back.drone.repairPct).toBeCloseTo(100 - 240 * 0.02, 3); // 0.02% a km
         expect(back.drone.plan).toEqual([]);
-        expect(await page.evaluate(() => window.game.logistics.launchBlocker(window.game.drones[0], { forSale: true }))).toMatch(/Needs 1200 Wh/);
+        expect(await page.evaluate(() => window.game.logistics.launchBlocker(window.game.drones[0], { forSale: true }))).toMatch(/Needs 832 Wh/); // a full sale out, back empty
     });
 
     test('a drone carries at most 35 kg: heavy modules wait for the port, and a planned share of an order goes', async ({ page }) => {
@@ -186,7 +188,7 @@ test.describe('transfer drones', () => {
         });
         await page.click('#cargo-btn');
         const sell = page.locator('[data-fab-action="sell"][data-box-id="box-c"]');
-        await expect(sell).toContainText('Send by Drone');
+        await expect(sell).toContainText('Send 35 of 40 L by Drone'); // one run takes 35 kg of it
         await sell.click();
 
         const away = await page.evaluate(() => ({ box: window.game.cargo.boxes.find(b => b.id === 'box-c').fillL, out: window.game.drones[0].cargoOut, credits: window.game.credits }));
@@ -572,20 +574,25 @@ test.describe('stripping the drives, the dock and the thrusters', () => {
             g.systems.fuel.current = 10;
             const noFuel = lg.flyBlocker('port');
             g.systems.fuel.current = 30;
-            lg.buyDrone(); // still flying over
+            const hopFuel = lg.hopFuelL();
+            g.ventsOpen = true;
+            const vents = lg.flyBlocker('port');
+            g.ventsOpen = false;
+            lg.buyDrone(); // still flying over: it doesn't stop her going
             const droneOut = lg.flyBlocker('port');
             lg._settleHome(g.drones[0]);
-            g.drones[0].state = 'parked';
-            const droneOutside = lg.flyBlocker('port');
             g.drones[0].state = 'stowed';
-            return { wrecked, hours: task.totalHours, fitted, noFuel, droneOut, droneOutside, ready: lg.flyBlocker('port') };
+            return { wrecked, hours: task.totalHours, fitted, noFuel, hopFuel, vents, droneOut, ready: lg.flyBlocker('port') };
         });
         expect(r.wrecked).toMatch(/Strip the wrecked atmospheric thrusters/);
         expect(r.hours).toBe(72);
         expect(r.fitted).toMatchObject({ installed: true, destroyed: false, repairPct: 100 });
-        expect(r.noFuel).toBe('Needs 20 L of fuel');
-        expect(r.droneOut).toMatch(/Wait for Transfer Drone 1/);
-        expect(r.droneOutside).toMatch(/Bring Transfer Drone 1 aboard/);
+        // 20 L is the hop at her maximum laden mass; she's lighter than that.
+        expect(r.hopFuel).toBeGreaterThan(10);
+        expect(r.hopFuel).toBeLessThan(20);
+        expect(r.noFuel).toBe(`Needs ${r.hopFuel} L of fuel`);
+        expect(r.vents).toMatch(/Close the vents/);
+        expect(r.droneOut).toBeNull();
         expect(r.ready).toBeNull();
 
         await page.evaluate(() => {
@@ -596,8 +603,11 @@ test.describe('stripping the drives, the dock and the thrusters', () => {
         });
         await page.click('[data-logi-action="fly"][data-to="port"]');
         const flying = await page.evaluate(() => ({ fuel: window.game.systems.fuel.current, flight: { ...window.game.flight } }));
-        expect(flying.fuel).toBeCloseTo(10, 5);
+        // Nothing burnt yet: the fuel goes as she flies.
+        expect(flying.fuel).toBeCloseTo(30, 5);
         expect(flying.flight.to).toBe('port');
+        expect(flying.flight.fuelL).toBeCloseTo(r.hopFuel, 5);
+        expect(await page.evaluate(() => { window.game.toggleVents(); return window.game.ventsOpen; })).toBe(false); // shut in flight
         await expect(page.locator('body')).toHaveAttribute('data-bg', 'flight');
         await expect(page.locator('#location-name')).toHaveText('In flight to Port Carrow');
         expect(await page.evaluate(() => window.game.fabrication.buyBlocker('basicComponents'))).toMatch(/In flight/);
@@ -609,6 +619,8 @@ test.describe('stripping the drives, the dock and the thrusters', () => {
         }));
         // At the port, what was waiting comes straight aboard, and trade is direct.
         expect(landed).toEqual({ berth: 'port', flight: null, hold: 0, agent: 1, mode: 'direct' });
+        // The whole hop's fuel was burnt on the way, and no more.
+        expect(await page.evaluate(() => window.game.systems.fuel.current)).toBeCloseTo(30 - r.hopFuel, 3);
         await expect(page.locator('body')).toHaveAttribute('data-bg', 'port');
         await expect(page.locator('[data-logi-action="fly"][data-to="yard"]')).toBeVisible();
     });
@@ -632,7 +644,7 @@ test.describe('saving', () => {
             lg.planAdd(g.drones[1].id, g.portHold[0].id, 1);
             lg.launch(g.drones[0].id, [{ kind: 'compost', litres: 12 }]);
             g.drones[0].hoursLeft = 0.7;
-            g.flight = { to: 'port', hoursLeft: 0.1, totalHours: 0.3 };
+            g.flight = { to: 'port', hoursLeft: 0.1, totalHours: 0.3, fuelL: 14.8 };
             const strip = lg.queueStrip('ionDrive');
             const snap = () => JSON.parse(JSON.stringify({ berth: g.berth, flight: g.flight, docks: g.droneDocks, drones: g.drones, hold: g.portHold }));
             const before = snap();

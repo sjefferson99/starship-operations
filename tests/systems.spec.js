@@ -3,7 +3,7 @@
 // maker, shift fatigue, and black-water overflow / dump fines. Like the other
 // specs, drives real game logic through window.game rather than re-implementing it.
 const { expect } = require('@playwright/test');
-const { test, startNewGame, bringCommsOnline, atPort } = require('./helpers.js');
+const { test, startNewGame, bringCommsOnline, atPort, quitToMenu } = require('./helpers.js');
 
 // Freezes the 1-second game timer so only the ticks a test runs explicitly happen.
 const freeze = page => page.evaluate(() => window.game._stopTimer());
@@ -362,9 +362,7 @@ test.describe('market and water maker', () => {
             };
         });
 
-        page.once('dialog', d => d.accept());
-        await page.keyboard.press('Escape');
-        await page.click('#main-menu-btn');
+        await quitToMenu(page);
         await page.click('#load-game-btn');
         await page.locator('.save-card').filter({ hasText: name }).locator('.save-load-btn').click();
         await page.waitForSelector('#game-container', { state: 'visible' });

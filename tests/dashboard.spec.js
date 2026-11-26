@@ -6,9 +6,14 @@ const { expect } = require('@playwright/test');
 const { test, startNewGame } = require('./helpers');
 
 const freeze = page => page.evaluate(() => window.game._stopTimer());
+// Measured within the dashboard's own scrolling area (.game-main), so scrolling
+// — the page's or the dashboard's — doesn't count as moving.
 const box = (page, sel) => page.locator(sel).evaluate(e => {
-    const r = e.getBoundingClientRect(); // page coordinates, so scrolling doesn't count as moving
-    return { x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height, bottom: r.bottom + scrollY };
+    const r = e.getBoundingClientRect();
+    const main = document.querySelector('.game-main');
+    const m = main.getBoundingClientRect();
+    const x = r.x - m.x + main.scrollLeft, y = r.y - m.y + main.scrollTop;
+    return { x, y, w: r.width, h: r.height, bottom: y + r.height };
 });
 
 test.describe('dashboard groups', () => {

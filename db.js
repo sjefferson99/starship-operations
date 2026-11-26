@@ -472,6 +472,14 @@ const MIGRATIONS = [
     db => {
         db.exec('ALTER TABLE drones ADD COLUMN plan_out TEXT;');
     },
+    // Where a drone flies back to (the ship may have flown on without it), and a
+    // flight's fuel bill, now burnt over the flight rather than at lift-off.
+    db => {
+        db.exec(`
+            ALTER TABLE drones ADD COLUMN base TEXT;
+            ALTER TABLE ship_logistics ADD COLUMN flight_fuel_l REAL;
+        `);
+    },
 ];
 
 function _ensureMetaTable(db) {
@@ -701,7 +709,7 @@ function _composeShip(db, saveId, shipRow) {
         // Absent (null) for a save written before logistics: the client starts it at the yard.
         logistics: logi ? {
             berth: logi.berth ?? 'yard',
-            flight: logi.flight_to ? { to: logi.flight_to, hoursLeft: logi.flight_hours_left ?? 0, totalHours: logi.flight_total_hours ?? 0 } : null,
+            flight: logi.flight_to ? { to: logi.flight_to, hoursLeft: logi.flight_hours_left ?? 0, totalHours: logi.flight_total_hours ?? 0, fuelL: logi.flight_fuel_l ?? 0 } : null,
             droneDocks: logi.drone_docks ?? 0,
             drones: drones.map(d => ({
                 id: d.id, tier: d.tier ?? 1, state: d.state, hoursLeft: d.hours_left ?? 0, chargeWh: d.charge_wh ?? 0,
@@ -710,6 +718,7 @@ function _composeShip(db, saveId, shipRow) {
                 planOut: json(d.plan_out, []),
                 repairPct: d.repair_pct ?? 100, juryRigged: !!d.jury_rigged,
                 cargoOut: json(d.cargo_out, []), cargoIn: json(d.cargo_in, []),
+                base: d.base ?? null,
             })),
             portHold: hold.map(h => json(h.entry, null)).filter(Boolean),
         } : null,
@@ -1044,18 +1053,18 @@ function _saveLogistics(db, saveId, shipId, logi) {
         db.prepare(`DELETE FROM ${table} WHERE save_id = ? AND ship_id = ?`).run(saveId, shipId));
     if (!logi) return;
     db.prepare(`
-        INSERT INTO ship_logistics (save_id, ship_id, berth, flight_to, flight_hours_left, flight_total_hours, drone_docks)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ship_logistics (save_id, ship_id, berth, flight_to, flight_hours_left, flight_total_hours, drone_docks, flight_fuel_l)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(saveId, shipId, logi.berth ?? 'yard', logi.flight?.to ?? null, logi.flight?.hoursLeft ?? null,
-        logi.flight?.totalHours ?? null, logi.droneDocks ?? 0);
+        logi.flight?.totalHours ?? null, logi.droneDocks ?? 0, logi.flight?.fuelL ?? null);
     const insertDrone = db.prepare(`
-        INSERT INTO drones (save_id, ship_id, id, position, tier, state, hours_left, charge_wh, repair_pct, jury_rigged, cargo_out, cargo_in, charge_from_battery, plan, plan_out)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO drones (save_id, ship_id, id, position, tier, state, hours_left, charge_wh, repair_pct, jury_rigged, cargo_out, cargo_in, charge_from_battery, plan, plan_out, base)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     (logi.drones ?? []).forEach((d, i) => insertDrone.run(saveId, shipId, String(d.id), i, d.tier ?? 1, d.state ?? 'stowed',
         d.hoursLeft ?? 0, d.chargeWh ?? 0, d.repairPct ?? 100, d.juryRigged ? 1 : 0,
         JSON.stringify(d.cargoOut ?? []), JSON.stringify(d.cargoIn ?? []), d.chargeFromBattery ? 1 : 0,
-        JSON.stringify(d.plan ?? []), JSON.stringify(d.planOut ?? [])));
+        JSON.stringify(d.plan ?? []), JSON.stringify(d.planOut ?? []), d.base ?? null));
     const insertHold = db.prepare('INSERT INTO port_hold (save_id, ship_id, id, position, entry) VALUES (?, ?, ?, ?, ?)');
     (logi.portHold ?? []).forEach((e, i) => insertHold.run(saveId, shipId, String(e.id ?? `hold-${i}`), i, JSON.stringify(e)));
 }

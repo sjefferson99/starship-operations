@@ -209,7 +209,7 @@ class RepairManager {
     canRepair(systemKey) {
         const sys = this._sys(systemKey);
         if (!sys || sys.destroyed || sys.installed === false) return false;
-        if (this.isDroneUnit(systemKey) && !this.game.logistics.isHome(sys)) return false; // out on a run
+        if (this.isDroneUnit(systemKey) && !this.game.logistics.isWithShip(sys)) return false; // out on a run, or waiting where the ship was
         if ((sys.repairPct ?? 100) >= this.REPAIR_AVAILABLE_BELOW_PCT) return false;
         return !this.game.repairQueue.some(t => t.systemKey === systemKey);
     }

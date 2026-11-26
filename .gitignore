@@ -4,3 +4,6 @@ playwright-report/
 blob-report/
 playwright/.cache/
 savegame/game.db
+
+# Repo-local Node install (see node-env.sh)
+.node/

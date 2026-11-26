@@ -107,6 +107,23 @@ class Fabrication {
         this.MODULE_JURY_RIG_VALUE = 0.6;
         this.MODULE_SCRAP_PRICE    = 15;
 
+        // Breaking down a wrecked module — fitted, in place, or stored in a
+        // machine box — instead of selling it for scrap. Like stripping the
+        // drives it's a Work Queue job (`kind: 'strip'`, `recipeKey` = the unit
+        // key: 'o2', or 'box:<id>'), taking `hours`; when it's done each part
+        // is rolled (game.rng) between min and max, so a bad one can give
+        // nothing at all. A fitted one leaves its slot empty (installed false).
+        this.BREAKDOWN = {
+            o2:          { hours: 4, yields: { basicComponents: [0, 3], precisionComponents: [0, 1] } },
+            co2:         { hours: 4, yields: { basicComponents: [0, 3], precisionComponents: [0, 1] } },
+            power:       { hours: 6, yields: { basicComponents: [0, 4], precisionComponents: [0, 1] } },
+            transceiver: { hours: 2, yields: { basicComponents: [0, 2], precisionComponents: [0, 2] } },
+            waterMaker:  { hours: 4, yields: { basicComponents: [0, 3], precisionComponents: [0, 1] } },
+            thrusters:   { hours: 8, yields: { basicComponents: [0, 4], precisionComponents: [0, 2] } },
+            ionDrive:    { hours: 12, yields: { basicComponents: [0, 4], precisionComponents: [0, 3] } },
+        };
+        this.BREAKDOWN_DEFAULT = { hours: 4, yields: { basicComponents: [0, 2] } };
+
         // Selling floods the market: each recent sale of a module type cuts
         // what the next one of that type fetches by MODULE_RESALE_DROP, and
         // each sale's effect wears off over MODULE_RESALE_RECOVERY_DAYS. Gentle:
@@ -633,6 +650,7 @@ class Fabrication {
     sellModuleBlocker(boxId) {
         const box = this._box(boxId);
         if (!box || !box.module) return 'Nothing stored';
+        if (this.breakDownTask(`box:${boxId}`)) return 'Being broken down — cancel that in the Work Queue to sell it';
         const mode = this.game.logistics.tradeMode();
         if (!mode) return this.game.logistics.tradeBlocker();
         if (mode === 'drone') return this.game.logistics.saleRunBlocker({ kind: 'module', boxId });
@@ -658,12 +676,96 @@ class Fabrication {
         return price;
     }
 
+    // The wrecked module a break-down job works on: a fitted one by its key,
+    // or one in a machine box by 'box:<id>'. Null if there's none there now.
+    _wreckAt(unitKey) {
+        const stored = typeof unitKey === 'string' && unitKey.startsWith('box:');
+        const mod = stored ? this._box(unitKey.slice(4))?.module : this.game.systems[unitKey];
+        if (!mod || !mod.destroyed || (!stored && mod.installed === false)) return null;
+        return { moduleKey: stored ? mod.moduleKey : unitKey, stored, mod };
+    }
+
+    breakDownSpec(moduleKey) {
+        return this.BREAKDOWN[moduleKey] ?? this.BREAKDOWN_DEFAULT;
+    }
+
+    breakDownTask(unitKey) {
+        return this.game.repairQueue.find(t => t.kind === 'strip' && t.recipeKey === unitKey) ?? null;
+    }
+
+    isBreakDownTask(task) {
+        return task?.kind === 'strip' && !this.game.logistics.STRIP[task.recipeKey];
+    }
+
+    // What a break-down job is working on, for the Work Queue: "O₂ Generator"
+    // or "O₂ Generator (Machine Box 1)".
+    breakDownLabel(unitKey) {
+        if (!unitKey.startsWith('box:')) return this.moduleName(unitKey);
+        const box = this._box(unitKey.slice(4));
+        return box?.module ? `${this.moduleName(box.module.moduleKey)} (${this.boxLabel(box)})` : 'Module';
+    }
+
+    breakDownBlocker(unitKey) {
+        const wreck = this._wreckAt(unitKey);
+        if (!wreck) return 'Only a wrecked unit is broken down — this one can still be repaired or sold';
+        if (this.breakDownTask(unitKey)) return 'Already in the work queue';
+        const most = Object.entries(this.breakDownSpec(wreck.moduleKey).yields)
+            .reduce((sum, [k, [, max]]) => sum + this.partLitres(k) * max, 0);
+        if (this.partsRoomL() < most - 1e-9) return 'Needs room in a storage box for whatever comes off it';
+        return null;
+    }
+
+    // Adds the job to the work queue.
+    queueBreakDown(unitKey) {
+        if (this.breakDownBlocker(unitKey)) return null;
+        const hours = this.breakDownSpec(this._wreckAt(unitKey).moduleKey).hours;
+        const task = {
+            id: `breakdown-${Date.now().toString(36)}-${++Fabrication._boxSeq}`, kind: 'strip', recipeKey: unitKey,
+            band: 'Break down for parts', totalHours: hours, hoursRemaining: hours, status: 'queued',
+        };
+        this.game.repairQueue.push(task);
+        return task;
+    }
+
+    // The job is done: the wreck comes out (its slot or box left empty) and
+    // what's still good goes into the parts boxes. If the wreck has gone
+    // meanwhile (sold, or a replacement fitted), there's nothing to do.
+    completeBreakDown(task) {
+        task.status = 'done';
+        const wreck = this._wreckAt(task.recipeKey);
+        if (!wreck) return null;
+        const got = [];
+        Object.entries(this.breakDownSpec(wreck.moduleKey).yields).forEach(([item, [min, max]]) => {
+            const n = min + Math.floor(this.game.rng.next() * (max - min + 1));
+            if (n > 0) { this.storeParts(item, n, { force: true }); got.push([item, n]); }
+        });
+        if (wreck.stored) {
+            this._box(task.recipeKey.slice(4)).module = null;
+        } else {
+            Object.assign(wreck.mod, { installed: false, destroyed: false, active: false, repairPct: 0, juryRigged: false });
+        }
+        this.game.notifications?.add({
+            key: `breakdown:${task.recipeKey}`, level: got.length ? 'good' : 'info',
+            title: `Wrecked ${this.moduleName(wreck.moduleKey)} broken down`,
+            detail: got.length ? `Recovered ${this.yieldLabel(got)}.` : 'Nothing in it was worth keeping.',
+        });
+        return got;
+    }
+
+    // "2 basic components and 1 precision component"
+    yieldLabel(got) {
+        return got.map(([k, n]) => {
+            const name = (this.ITEMS[k]?.name ?? k).toLowerCase();
+            return `${n} ${n === 1 ? name.replace(/s$/, '') : name}`;
+        }).join(' and ');
+    }
+
     swapBlocker(boxId) {
         const box = this._box(boxId);
         if (!box || !box.module) return 'Nothing stored';
         const sys = this.game.systems[box.module.moduleKey];
         if (!sys) return 'Not compatible with this ship';
-        if (box.module.destroyed) return 'Wrecked — it can only be sold for scrap';
+        if (box.module.destroyed) return 'Wrecked — sell it for scrap, or break it down for parts';
         return null;
     }
 
@@ -780,6 +882,7 @@ class Fabrication {
 
     // A finished job (fabrication or stripping a drive) delivers its result.
     completeTask(task) {
+        if (this.isBreakDownTask(task)) { this.completeBreakDown(task); return; }
         if (task.kind === 'strip') { this.game.logistics.completeStrip(task); return; }
         const recipe = this.RECIPES[task.recipeKey];
         task.status = 'done';

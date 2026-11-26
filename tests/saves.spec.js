@@ -2,17 +2,10 @@
 // saves with previews, saves can be loaded back exactly, deleted, and duplicate
 // names are blocked rather than silently overwritten.
 const { expect } = require('@playwright/test');
-const { test, startNewGame } = require('./helpers.js');
+const { test, startNewGame, quitToMenu } = require('./helpers.js');
 
 function uniqueName(label) {
     return `${label} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function quitToMenu(page) {
-    page.once('dialog', d => d.accept());
-    await page.keyboard.press('Escape');           // opens the pause menu
-    await page.click('#main-menu-btn');             // returnToMainMenu()
-    await page.waitForSelector('#launch-screen', { state: 'visible' });
 }
 
 async function openLoadScreen(page) {

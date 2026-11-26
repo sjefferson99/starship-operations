@@ -11,8 +11,9 @@ test.describe('autosave', () => {
         const runningAfterStart = await page.evaluate(() => window.game.autosaveTimer !== null);
         expect(runningAfterStart).toBe(true);
 
-        page.on('dialog', d => d.accept()); // returnToMainMenu() confirms via window.confirm
+        // Unsaved play: returnToMainMenu() asks in the game's own dialog — leave without saving.
         await page.evaluate(() => window.game.returnToMainMenu());
+        await page.click('#quit-discard-btn');
 
         const stoppedAfterMenu = await page.evaluate(() => window.game.autosaveTimer);
         expect(stoppedAfterMenu).toBeNull();

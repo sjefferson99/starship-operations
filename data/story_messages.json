@@ -36,5 +36,40 @@
       }
     ],
     "continueLabel": "BEGIN YOUR STORY →"
+  },
+  "port-arrival": {
+    "background": "port",
+    "header": {
+      "year": 2287,
+      "location": "PORT CARROW, KEL VETH III",
+      "title": "PORT CARROW"
+    },
+    "body": [
+      {
+        "class": "intro-lead",
+        "text": "She comes down hard on Pad 31, thrusters coughing, and the whole frame settles with a groan you feel through your boots. Nothing falls off. You'll take it."
+      },
+      {
+        "text": "Port Carrow is the busiest place on this side of Kel Veth III, which is not saying much. Three hundred landing pads sprawl across a scorched basalt shelf, ringed by stacked habitat blocks, fuel farms and a market that never quite closes. Lifters drone overhead day and night. The air tastes of hot metal and frying oil."
+      },
+      {
+        "text": "Don't get your hopes up. This is still Kel Veth. The paint on the control tower peeled off a decade ago, the customs office runs on bribes and patience, and the best restaurant in port is a noodle counter called Auntie Vo's wedged between two coolant tanks. Half the ships on the pads are older than yours. The other half are worse."
+      },
+      {
+        "text": "But everything that leaves this planet passes through here. Salvage brokers on the Rustline haggle over drive cores pulled from wrecks. Dockhands, mechanics and out-of-work pilots loiter around the hiring boards at the Slip, hoping someone will take a chance on them. And the freight agents at the Exchange post contracts that would never reach a salvage yard 120 kilometres out in the scrub."
+      },
+      {
+        "text": "Proper parts. Crew who know which end of a spanner to hold. Jobs that pay real credits — for anyone whose ship can prove it's mostly in one piece."
+      },
+      {
+        "class": "intro-finale",
+        "text": "You're not flying out of here yet. But for the first time in two years, you can see the road off this rock from where you're standing."
+      },
+      {
+        "class": "intro-tagline",
+        "text": "Welcome to Port Carrow. Mind your wallet."
+      }
+    ],
+    "continueLabel": "STEP OUT ONTO THE PAD →"
   }
 }

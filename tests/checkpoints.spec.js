@@ -2,7 +2,7 @@
 // and the Timeline screen (timeline.js) that takes checkpoints and goes back
 // to them. Going back must never lose a line that was already played.
 const { expect } = require('@playwright/test');
-const { test, startNewGame } = require('./helpers.js');
+const { test, startNewGame, quitToMenu } = require('./helpers.js');
 const db = require('../db.js');
 
 const HOUR = 3600;
@@ -292,9 +292,7 @@ test.describe('Timeline', () => {
         const body = await page.evaluate(() => ({ world: GameState.snapshot(window.game), shipInstances: GameState.shipInstanceSnapshot(window.game) }));
         await request.put(`/api/saves/${id}`, { data: body });
 
-        page.once('dialog', d => d.accept());
-        await page.keyboard.press('Escape');
-        await page.click('#main-menu-btn');
+        await quitToMenu(page);
         await page.click('#load-game-btn');
         await page.locator('.save-card').filter({ hasText: oldName }).locator('.save-load-btn').click();
         await page.waitForSelector('#game-container', { state: 'visible' });

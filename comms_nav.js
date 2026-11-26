@@ -267,7 +267,9 @@ class CommsNav {
         sys.juryRigged = false;
         sys.active     = false;
         sys.repairPct  = repairPct;
-        this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== moduleKey);
+        // So does a queued break-down of the wreck it replaces.
+        this.game.repairQueue = this.game.repairQueue.filter(t => t.systemKey !== moduleKey
+            && !(t.kind === 'strip' && t.recipeKey === moduleKey));
     }
 
     // At the port the bought unit goes straight in (or into an empty machine

@@ -59,6 +59,7 @@ class StarshipGame {
         this.crew       = 1;
         this.gameTime   = 0;
         this.gameSpeed  = 1;
+        this.SPEEDS     = [1, 10, 100, 1000, 10000]; // the header's speed buttons
 
         // Ship identity (loaded from ship databases)
         this.shipInstanceId   = 'player-ship-1';
@@ -105,6 +106,10 @@ class StarshipGame {
         this.pauseMenu      = document.getElementById('pause-menu');
         this.seedScreen      = document.getElementById('seed-screen');
         this.introModal     = document.getElementById('intro-modal');
+        this.storyModal     = document.getElementById('story-modal');
+        this.quitConfirm    = document.getElementById('quit-confirm');
+        this._storyOpen     = false; // a story page on screen holds the clock
+        this._savedWhilePaused = false; // saved since pausing: nothing to lose by quitting
         this.taskQueueScreen = document.getElementById('task-queue-screen');
         this.loadScreen      = document.getElementById('load-screen');
         this.crewScreen      = document.getElementById('crew-screen');
@@ -249,6 +254,7 @@ class StarshipGame {
         });
         document.getElementById('comms-nav-btn').addEventListener('click',         () => this._openCommsNavScreen());
         document.getElementById('comms-nav-close-btn').addEventListener('click',   () => this._closeCommsNavScreen());
+        document.getElementById('comms-nav-header-btn').addEventListener('click',  () => this._openCommsNavScreen());
         document.getElementById('ship-capacity-btn').addEventListener('click',       () => this._openShipCapacityScreen());
         document.getElementById('ship-capacity-close-btn').addEventListener('click', () => this._closeShipCapacityScreen());
         document.getElementById('cargo-btn').addEventListener('click',               () => this._openCargoScreen());
@@ -288,12 +294,15 @@ class StarshipGame {
             this.buyMarketItem(btn.dataset.listingId, 'store');
         });
         document.getElementById('tour-btn').addEventListener('click',                () => { this.tour.setTipsEnabled(true); this.tour.start(); });
-        document.getElementById('quit-btn').addEventListener('click',      () => this.quitGame());
         document.getElementById('resume-btn').addEventListener('click',    () => this.togglePause());
         document.getElementById('save-btn').addEventListener('click',      () => this.saveGame());
         document.getElementById('timeline-btn').addEventListener('click',  () => this.timeline.open());
         document.getElementById('export-btn').addEventListener('click',    () => GameState.exportFile(this));
         document.getElementById('main-menu-btn').addEventListener('click', () => this.returnToMainMenu());
+        document.getElementById('quit-save-btn').addEventListener('click',    () => this._saveAndQuit());
+        document.getElementById('quit-discard-btn').addEventListener('click', () => this._leaveToMainMenu());
+        document.getElementById('quit-cancel-btn').addEventListener('click',  () => Overlay.hide(this.quitConfirm));
+        document.getElementById('story-continue-btn').addEventListener('click', () => this._closeStory());
 
         document.getElementById('o2-toggle').addEventListener('click',    () => this.toggleSystem('o2'));
         document.getElementById('co2-toggle').addEventListener('click',   () => this.toggleSystem('co2'));
@@ -343,12 +352,20 @@ class StarshipGame {
             this.systems.power.target = isNaN(v) ? null : v;
         });
 
-        [1, 10, 100, 1000].forEach(s =>
+        this.SPEEDS.forEach(s =>
             document.getElementById(`speed-${s}x`).addEventListener('click', () => this.setGameSpeed(s))
         );
+        // Hold the clock on each new notification until it's read (notifications.js).
+        // Drop back to 1× whenever a tick lists something new (notifications.js).
+        const newsToggle = document.getElementById('slow-on-news-toggle');
+        newsToggle.checked = this.notifications.slowOnNews;
+        newsToggle.addEventListener('change', () => this.notifications.setSlowOnNews(newsToggle.checked));
 
         document.addEventListener('keydown', e => {
             if (e.key !== 'Escape') return;
+            // The leave-for-the-main-menu question, then a story page, close first.
+            if (Overlay.isOpen(this.quitConfirm)) { Overlay.hide(this.quitConfirm); return; }
+            if (this._storyOpen) { this._closeStory(); return; }
             // The Timeline sits on top of the pause menu (and of GAME OVER):
             // Escape closes it first.
             if (this.timeline.isOpen()) { this.timeline.close(); return; }
@@ -518,7 +535,7 @@ class StarshipGame {
         this._syncTargetInputs();
         this._updateShipIdentityUI();
         this.launchScreen.style.display  = 'none';
-        this.gameContainer.style.display = 'block';
+        this.gameContainer.style.display = 'flex'; // header fixed, dashboard scrolls (css .game-main)
         // A new game always opens with every group expanded (a loaded save
         // keeps whatever was last chosen).
         this._collapsedGroups.clear();
@@ -609,27 +626,13 @@ class StarshipGame {
             this._updateShipIdentityUI();
             this._closeLoadScreen();
             this.launchScreen.style.display  = 'none';
-            this.gameContainer.style.display = 'block';
+            this.gameContainer.style.display = 'flex'; // header fixed, dashboard scrolls (css .game-main)
             this._playDashboardIntro();
             this._startTimer();
             this._startAutosaveTimer();
             this.updateDisplay();
             this.timeline.onGameLoaded();
         } catch (e) { alert('Could not load save: ' + e.message); }
-    }
-
-    quitGame() {
-        if (confirm('Quit to main menu?')) {
-            this._stopTimer();
-            this._stopAutosaveTimer();
-            this.gameActive = false;
-            this.saveId     = null;
-            this.saveName   = null;
-            this.setBackground('space');
-            this.launchScreen.style.display  = 'block';
-            this.gameContainer.style.display = 'none';
-            Overlay.hide(this.pauseMenu);
-        }
     }
 
     endGame() {
@@ -693,7 +696,13 @@ class StarshipGame {
 
     toggleVents() {
         if (!this.gameActive || this.gamePaused || !this.inBreathableAtmosphere) return;
+        // In flight she's too high for the vents to work: they stay shut until she lands.
+        if (!this.ventsOpen && this.logistics.isFlying()) return;
         this.ventsOpen = !this.ventsOpen;
+        const off = this._lifeSupportOff();
+        if (!this.ventsOpen && off.length) {
+            this._showSaveStatus(`Vents closed — switch on the ${off.map(k => (k === 'o2' ? 'O₂ generator' : 'CO₂ scrubber')).join(' and ')}`, true);
+        }
         this.updateDisplay();
     }
 
@@ -888,6 +897,13 @@ class StarshipGame {
                 }
                 break;
             }
+            case 'breakDown': {
+                // A wreck in a machine box (boxId), or a fitted one, in place (key).
+                const unit = boxId ? `box:${boxId}` : key;
+                const name = fab.breakDownLabel(unit);
+                if (fab.queueBreakDown(unit)) this._showSaveStatus(`Breaking down the ${name} added to the work queue`);
+                break;
+            }
             case 'sellModule': {
                 const name = fab.moduleName(fab.storedModule(boxId)?.moduleKey);
                 if (byDrone) {
@@ -921,6 +937,8 @@ class StarshipGame {
     togglePause() {
         if (!this.gameActive) return;
         this.gamePaused = !this.gamePaused;
+        // Pausing or resuming, the clock may have moved since the last save.
+        this._savedWhilePaused = false;
         if (this.gamePaused) Overlay.show(this.pauseMenu); else Overlay.hide(this.pauseMenu);
     }
 
@@ -932,6 +950,7 @@ class StarshipGame {
     async _saveWithCheckpoint(kind) {
         try {
             await GameState.saveServer(this);
+            if (this.gamePaused) this._savedWhilePaused = true;
             this._showSaveStatus('Saved');
         } catch (e) {
             this._showSaveStatus('Save failed — is server.js running?', true);
@@ -950,6 +969,7 @@ class StarshipGame {
         this.crew             = this.crewManager.aliveCount();
         this.gameActive       = true;
         this.gamePaused       = true;
+        this._savedWhilePaused = true; // the checkpoint just restored is the live save
         this._resetPauseMenuUI();
         Overlay.show(this.pauseMenu);
         this._applySpeedUI();
@@ -964,24 +984,85 @@ class StarshipGame {
     async _autosave() {
         try {
             await GameState.saveServer(this);
+            if (this.gamePaused) this._savedWhilePaused = true;
             this._showSaveStatus('Autosaved');
         } catch (e) {
             this._showSaveStatus('Autosave failed — is server.js running?', true);
         }
     }
 
+    // From the pause menu. Saved since pausing (the clock hasn't moved since),
+    // or the game is over: nothing to lose, so straight out. Otherwise ask, in
+    // the game's own dialog, whether to save first.
     returnToMainMenu() {
-        if (confirm('Return to main menu? Unsaved progress will be lost.')) {
-            this._stopTimer();
-            this._stopAutosaveTimer();
-            this.gameActive = false;
-            this.saveId     = null;
-            this.saveName   = null;
-            this.setBackground('space');
-            this.launchScreen.style.display  = 'block';
-            this.gameContainer.style.display = 'none';
-            Overlay.hide(this.pauseMenu);
+        if (!this.gameActive || this._savedWhilePaused) { this._leaveToMainMenu(); return; }
+        Overlay.show(this.quitConfirm);
+    }
+
+    async _saveAndQuit() {
+        try {
+            await GameState.saveServer(this);
+        } catch (e) {
+            Overlay.hide(this.quitConfirm);
+            this._showSaveStatus('Save failed — is server.js running?', true);
+            return;
         }
+        await this.timeline.checkpoint('save');
+        this._leaveToMainMenu();
+    }
+
+    _leaveToMainMenu() {
+        this._stopTimer();
+        this._stopAutosaveTimer();
+        this.gameActive = false;
+        this.saveId     = null;
+        this.saveName   = null;
+        this._savedWhilePaused = false;
+        this._storyOpen = false;
+        this.setBackground('space');
+        this.launchScreen.style.display  = 'block';
+        this.gameContainer.style.display = 'none';
+        Overlay.hide(this.quitConfirm);
+        Overlay.hide(this.storyModal);
+        Overlay.hide(this.pauseMenu);
+    }
+
+    // ── Story pages met in play (data/story_messages.json) ──────────────────
+    // Each is shown once per save (remembered in localStorage, like tips), and
+    // holds the clock while it's open.
+
+    // Called by Logistics when the ship sets down.
+    onLanded(berth) {
+        if (berth === 'port') this._showStory('port-arrival');
+    }
+
+    _storySeenKey(id) {
+        return `starshipOps.story.${this.saveId}.${id}`;
+    }
+
+    _showStory(id) {
+        const msg = this.storyMessages?.[id];
+        if (!msg) return false;
+        try {
+            if (localStorage.getItem('starshipOps.storiesOff') === '1') return false;
+            if (localStorage.getItem(this._storySeenKey(id)) === '1') return false;
+            localStorage.setItem(this._storySeenKey(id), '1');
+        } catch { /* no storage: show it anyway */ }
+        const header = msg.header ?? {};
+        document.getElementById('story-header').innerHTML =
+            `<div class="intro-year">YEAR ${header.year ?? ''} — ${header.location ?? ''}</div>` +
+            `<h2 class="intro-title">${header.title ?? ''}</h2>`;
+        document.getElementById('story-body').innerHTML = (msg.body ?? [])
+            .map(p => `<p${p.class ? ` class="${p.class}"` : ''}>${p.text}</p>`).join('');
+        document.getElementById('story-continue-btn').textContent = msg.continueLabel ?? 'CONTINUE →';
+        this._storyOpen = true;
+        Overlay.show(this.storyModal);
+        return true;
+    }
+
+    _closeStory() {
+        this._storyOpen = false;
+        Overlay.hide(this.storyModal);
     }
 
     setGameSpeed(speed) {
@@ -990,7 +1071,7 @@ class StarshipGame {
     }
 
     _applySpeedUI() {
-        [1, 10, 100, 1000].forEach(s => {
+        this.SPEEDS.forEach(s => {
             document.getElementById(`speed-${s}x`).className =
                 'speed-btn' + (s === this.gameSpeed ? ' speed-active' : '');
         });
@@ -1005,9 +1086,14 @@ class StarshipGame {
             // A tutorial step or tip on screen holds the clock (without the pause
             // menu, so the controls it points at still work).
             if (this.tour.holdsTime()) return;
+            // So does a story page.
+            if (this._storyOpen) return;
+            const addedBefore = this.notifications.addedCount;
             this.gameTime += this.gameSpeed;
             this.systemUpdate.update(this.gameSpeed);
             this.updateDisplay();
+            // With "1× on notification", news drops the speed back to 1×.
+            if (this.notifications.addedCount > addedBefore) this.notifications.slowIfWanted();
             this.tour.checkTips();
             this.timeline.maybeCheckpoint();
         }, 1000);
@@ -1244,15 +1330,22 @@ class StarshipGame {
             }
         } else if (key === 'thrusters') {
             badge = lg.isFlying() ? 'FLYING' : 'READY'; status = 'Normal';
-            value = lg.isFlying() ? `${Math.round(lg.game.flight.hoursLeft * 60)} min` : `${lg.hopFuelL()} L`;
-            label = lg.isFlying() ? `to ${lg.berthName(lg.game.flight.to)}` : 'fuel per hop';
+            const fuelL = lg.hopFuelL();
+            value = lg.isFlying() ? `${Math.round(lg.game.flight.hoursLeft * 60)} min` : `${fuelL} L`;
+            label = lg.isFlying() ? `to ${lg.berthName(lg.game.flight.to)}` : 'fuel for the hop';
             const to = lg.berth() === 'port' ? 'yard' : 'port';
-            details = `<p>A hop between ${lg.YARD_NAME} and ${lg.PORT_NAME} is ${lg.YARD_TO_PORT_KM} km: about
-                       ${Math.round(lg.hopHours() * 60)} minutes and ${lg.hopFuelL()} L of fuel. Fuel aboard: ${this.systems.fuel.current.toFixed(1)} L.</p>`;
+            details = lg.isFlying()
+                ? `<p>Burning fuel as she goes: ${lg.flightFuelLeftL().toFixed(1)} L still to burn before she lands.
+                   Fuel aboard: ${this.systems.fuel.current.toFixed(1)} L.</p>`
+                : `<p>A hop between ${lg.YARD_NAME} and ${lg.PORT_NAME} is ${lg.YARD_TO_PORT_KM} km: about
+                   ${Math.round(lg.hopHours() * 60)} minutes and ${fuelL} L of fuel at her current mass — the heavier she is,
+                   the more she burns. Fuel aboard: ${this.systems.fuel.current.toFixed(1)} L.</p>
+                   <p>The vents must be closed to lift off. Drones out on a run, or parked outside, stay behind:
+                   they land where she was and wait for her to come back.</p>`;
             if (!lg.isFlying()) {
                 blocker  = lg.flyBlocker(to);
                 controls = this._logiBtn('fly', `Fly to ${lg.berthName(to)}`, blocker, { to },
-                    `Lift off on the atmospheric thrusters: about ${Math.round(lg.hopHours() * 60)} minutes and ${lg.hopFuelL()} L of fuel`);
+                    `Lift off on the atmospheric thrusters: about ${Math.round(lg.hopHours() * 60)} minutes and ${fuelL} L of fuel`);
             }
         } else {
             badge = 'FITTED'; value = 'Fitted'; label = 'ion drive'; status = 'Normal';
@@ -1287,12 +1380,12 @@ class StarshipGame {
 
         let badge = 'NONE', status = 'Warning', value = '0', label = 'drones', rows = '';
         if (drones.length) {
-            const home = drones.filter(d => lg.isHome(d)).length;
+            const home = drones.filter(d => lg.isWithShip(d)).length;
             value  = String(drones.length);
             label  = `${drones.length === 1 ? 'drone' : 'drones'} · ${home} home`;
             const anyReady = drones.some(d => !lg.launchBlocker(d, { forSale: true })); // could fly, planned or not
             badge  = lg.atPort() ? 'AT PORT' : anyReady ? 'READY' : home ? 'GROUNDED' : 'AWAY';
-            status = lg.atPort() || anyReady || home < drones.length ? 'Normal' : 'Warning';
+            status = lg.atPort() || anyReady || drones.some(d => lg.isAway(d)) ? 'Normal' : 'Warning';
             rows = drones.map(d => this._droneRowHtml(d)).join('');
         }
 
@@ -1318,7 +1411,7 @@ class StarshipGame {
             arriving:  `Flying over from ${lg.PORT_NAME} — ${this._fmtHrs(d.hoursLeft)}`,
             outbound:  `Heading to ${lg.PORT_NAME} — ${this._fmtHrs(d.hoursLeft + lg.droneLegHours())} round trip left`,
             returning: `On its way back — ${this._fmtHrs(d.hoursLeft)}`,
-            parked:    'Parked outside — not charging',
+            parked:    lg.isLeftBehind(d) ? `At ${lg.berthName(lg.droneBase(d))} — waiting for the ship to come back for it` : 'Parked outside — not charging',
             stowed:    'Stowed aboard — not charging',
             docked:    (d.chargeWh ?? 0) >= cap - 1e-6 ? 'Docked — fully charged' : this._droneChargingText(d),
         }[d.state] ?? d.state;
@@ -1331,7 +1424,8 @@ class StarshipGame {
         const planned = lg.plan(d);
         const goingOut = lg.planOut(d).map(o => {
             const box = this.fabrication._box(o.boxId);
-            return o.kind === 'module' && box?.module ? this.fabrication.moduleName(box.module.moduleKey) : 'compost';
+            if (o.kind === 'module' && box?.module) return this.fabrication.moduleName(box.module.moduleKey);
+            return `${(lg.planOutCompostLitres(d)[o.boxId] ?? 0).toFixed(1)} L compost`;
         });
         const planLine = (planned.length || goingOut.length) && lg.isHome(d)
             ? (goingOut.length ? `<div class="drone-meta">Selling: ${this._escapeHtml(goingOut.join(', '))}
@@ -1340,12 +1434,12 @@ class StarshipGame {
                (${lg.planMassKg(d).toFixed(0)} / ${lg.droneSpec('payloadKg')} kg)</div>` : '')
             : '';
         let actions = '';
-        if (lg.isHome(d)) {
+        if (lg.isWithShip(d)) {
             if (!lg.atPort()) {
                 actions += this._logiBtn('planRun', 'Plan Run', null, id,
                     `Choose what this drone brings back from the port, up to ${lg.droneSpec('payloadKg')} kg`);
                 actions += this._logiBtn('launch', 'Send to Port', lg.launchBlocker(d), id,
-                    `Fly to ${lg.PORT_NAME} and back (about ${this._fmtHrs(2 * lg.droneLegHours())}), bringing what's planned`);
+                    `Fly to ${lg.PORT_NAME} and back (about ${this._fmtHrs(2 * lg.droneLegHours())} and ${Math.round(lg.roundTripWh(d))} Wh), bringing what's planned`);
             }
             if (d.state !== 'docked') actions += this._logiBtn('dock', 'Dock', lg.dockBlocker(d), id,
                 'Put it on a drone dock aboard, where it charges from spare generator power');
@@ -1359,7 +1453,7 @@ class StarshipGame {
             actions += `<button class="repair-btn drone-battery-btn${d.chargeFromBattery ? ' btn-on' : ''}" data-logi-action="batteryCharge" data-drone-id="${d.id}"
                 title="When spare generator power isn't enough, also charge from the ship's battery (never below ${this.systemUpdate.DOCK_BATTERY_FLOOR_PCT}%)">Charge from Battery: ${d.chargeFromBattery ? 'ON' : 'OFF'}</button>`;
         }
-        const why = lg.isHome(d) && !lg.atPort() ? lg.launchBlocker(d) : null;
+        const why = lg.isWithShip(d) && !lg.atPort() ? lg.launchBlocker(d) : null;
         return `
             <li class="drone-row" data-drone-id="${d.id}">
                 <div class="drone-title">${lg.droneLabel(d)} &middot; charge ${chargePct}% &middot; condition ${Math.round(d.repairPct ?? 100)}%${task ? ' · repair queued' : ''}</div>
@@ -1445,16 +1539,23 @@ class StarshipGame {
         // A module going out frees its machine box for one coming back.
         const fab = this.fabrication;
         const outMass = lg.planOutMassKg(d);
+        const compostGoing = lg.planOutCompostLitres(d);
         const outgoing = lg.outCandidates().map(o => {
             const box = fab._box(o.boxId);
             const by  = lg.outPlannedBy(o.boxId);
             const data = { ...id, 'box-id': o.boxId };
             const isModule = o.kind === 'module';
+            // A drone takes compost only up to what's left of its payload; the
+            // rest stays in the box for another run — say how much really goes.
+            const goesL = isModule ? 0
+                : by === d ? (compostGoing[o.boxId] ?? 0)
+                : Math.min(box.fillL, Math.max(0, payload - outMass) / fab.BOX.contentDensityKgPerL);
+            const partial = !isModule && goesL < box.fillL - 0.05;
             const label = isModule
                 ? `${fab.moduleName(box.module.moduleKey)} (${Math.round(box.module.repairPct ?? 100)}%)`
-                : `${box.fillL.toFixed(1)} L of compost`;
-            const mass  = isModule ? fab.moduleMassKg(box.module) : box.fillL * fab.BOX.contentDensityKgPerL;
-            const value = isModule ? fab.moduleSaleValue(box.module) : fab.salePrice(box);
+                : partial ? `${goesL.toFixed(1)} of ${box.fillL.toFixed(1)} L of compost` : `${box.fillL.toFixed(1)} L of compost`;
+            const mass  = isModule ? fab.moduleMassKg(box.module) : goesL * fab.BOX.contentDensityKgPerL;
+            const value = isModule ? fab.moduleSaleValue(box.module) : Math.round(goesL * fab.COMPOST_PRICE_PER_L);
             const repairing = isModule && this.repairQueue.some(t => t.systemKey === `box:${box.id}`)
                 ? ' · its queued repair is dropped when it goes' : '';
             const button = by === d
@@ -1467,7 +1568,8 @@ class StarshipGame {
                 <li class="task-card task-card-static" data-out-box-id="${o.boxId}">
                     <div class="task-info">
                         <div class="task-title">${this._escapeHtml(label)} <span class="task-meta">— ${this._escapeHtml(fab.boxLabel(box))}</span></div>
-                        <div class="task-meta">${kg(mass)} · sells for about ${value} cr${repairing}</div>
+                        <div class="task-meta">${kg(mass)} · sells for about ${value} cr${repairing}${partial
+                            ? ` · only ${kg(goesL * fab.BOX.contentDensityKgPerL)} fits this run — the rest stays in the box` : ''}</div>
                     </div>
                     <div class="cargo-box-actions">${button}</div>
                 </li>`;
@@ -1479,6 +1581,9 @@ class StarshipGame {
                 <div class="task-progress-track"><div class="task-progress-fill" style="width:${Math.min(100, (kgNow / payload) * 100).toFixed(1)}%"></div></div>
             </div>`;
         const launchBlocker = lg.launchBlocker(d);
+        const needWh = lg.roundTripWh(d);
+        const energyLine = `<p class="drone-run-energy task-meta">Round trip: ${Math.round(needWh)} Wh of its ${Math.round(d.chargeWh ?? 0)} Wh charge.
+            A drone uses less the lighter it flies — ${Math.round(lg.droneLegWh(0))} Wh a leg empty, ${Math.round(lg.droneLegWh(payload))} Wh fully loaded.</p>`;
         const html = `
             <h3 class="overlay-section-title">Taking to the port to sell</h3>
             ${bar('drone-run-out-weight-label', 'going out', outMass)}
@@ -1488,6 +1593,7 @@ class StarshipGame {
             <ul class="overlay-list" id="drone-run-planned">${planned || '<li class="task-empty">Nothing yet — add what you want from below.</li>'}</ul>
             <h3 class="overlay-section-title">Waiting at ${lg.PORT_NAME}</h3>
             <ul class="overlay-list" id="drone-run-waiting">${waiting || '<li class="task-empty">Nothing is waiting — buy from the market in Comms &amp; Nav first.</li>'}</ul>
+            ${energyLine}
             <div class="drone-run-footer">
                 ${lg.plan(d).length || lg.planOut(d).length ? this._logiBtn('planClear', 'Clear Plan', null, id, 'Take everything off the plan, both ways') : ''}
                 ${this._logiBtn('launch', 'Send to Port', launchBlocker, id,
@@ -1517,7 +1623,7 @@ class StarshipGame {
                 if (lg.queueStrip(key)) this._showSaveStatus(`Stripping the ${lg.DRIVE_NAMES[key].toLowerCase()} added to the work queue`);
                 break;
             case 'fly':
-                if (lg.fly(to)) this._showSaveStatus(`Lifting off for ${lg.berthName(to)} — ${lg.hopFuelL()} L of fuel`);
+                if (lg.fly(to)) this._showSaveStatus(`Lifting off for ${lg.berthName(to)} — ${this.flight.fuelL} L of fuel to burn`);
                 break;
             case 'launch':
                 if (lg.launch(droneId)) {
@@ -1582,7 +1688,7 @@ class StarshipGame {
         const btn = document.getElementById('o2-toggle');
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
-        btn.disabled     = !!sys.destroyed;
+        btn.disabled     = !!sys.destroyed || sys.installed === false;
         this._setCardStatus('card-o2', sys.status);
 
         this._displayRepairPanel('o2', 'o2');
@@ -1619,7 +1725,7 @@ class StarshipGame {
         const btn = document.getElementById('co2-toggle');
         btn.textContent = sys.active ? 'Disable Scrubber' : 'Enable Scrubber';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
-        btn.disabled     = !!sys.destroyed;
+        btn.disabled     = !!sys.destroyed || sys.installed === false;
         this._setCardStatus('card-co2', sys.status);
 
         this._displayRepairPanel('co2', 'co2');
@@ -1662,7 +1768,7 @@ class StarshipGame {
         const btn = document.getElementById('power-toggle');
         btn.textContent = sys.active ? 'Disable Generator' : 'Enable Generator';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
-        btn.disabled     = !!sys.destroyed;
+        btn.disabled     = !!sys.destroyed || sys.installed === false;
         this._setCardStatus('card-power', sys.status);
 
         this._displayRepairPanel('power', 'power');
@@ -1975,7 +2081,7 @@ class StarshipGame {
         const btn = document.getElementById('transceiver-toggle');
         btn.textContent = sys.active ? 'Disable Transceiver' : 'Enable Transceiver';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
-        btn.disabled    = !!sys.destroyed;
+        btn.disabled    = !!sys.destroyed || sys.installed === false;
         this._setCardStatus('card-transceiver', sys.status);
 
         this._displayRepairPanel('transceiver', 'transceiver');
@@ -2024,7 +2130,7 @@ class StarshipGame {
         const btn = document.getElementById('watermaker-toggle');
         btn.textContent = sys.active ? 'Disable Water Maker' : 'Enable Water Maker';
         btn.className   = 'toggle-btn ' + (sys.active ? 'btn-on' : 'btn-off');
-        btn.disabled    = !!sys.destroyed;
+        btn.disabled    = !!sys.destroyed || sys.installed === false;
 
         this._displayRepairPanel('waterMaker', 'watermaker');
     }
@@ -2156,6 +2262,15 @@ class StarshipGame {
         document.getElementById('capacity-breakdown').innerHTML = rows.join('');
     }
 
+    // Life support that's needed (vents shut) but switched off: ['o2', 'co2'].
+    _lifeSupportOff() {
+        if (this.ventsOpen && this.inBreathableAtmosphere) return [];
+        return ['o2', 'co2'].filter(k => {
+            const s = this.systems[k];
+            return !s.active && !s.destroyed && s.installed !== false;
+        });
+    }
+
     _displayEnvironment() {
         const dot     = document.getElementById('atmos-dot');
         const label   = document.getElementById('atmos-label');
@@ -2165,10 +2280,23 @@ class StarshipGame {
         dot.className     = this.inBreathableAtmosphere ? 'env-dot breathable' : 'env-dot';
         label.textContent = this.inBreathableAtmosphere ? 'BREATHABLE ATMOSPHERE' : 'VACUUM / SPACE';
 
-        ventBtn.disabled    = !this.inBreathableAtmosphere;
+        const flying = this.logistics.isFlying();
+        ventBtn.disabled    = !this.inBreathableAtmosphere || (flying && !this.ventsOpen);
+        ventBtn.title       = flying && !this.ventsOpen ? 'In flight — she\'s too high for the vents to work' : '';
         ventLbl.textContent = this.ventsOpen ? 'Vents: OPEN' : 'Vents: CLOSED';
         ventBtn.textContent = this.ventsOpen ? 'Close Vents' : 'Open Vents';
         ventBtn.className   = 'toggle-btn ' + (this.ventsOpen ? 'btn-on' : 'btn-off');
+
+        // Vents shut with life support off: say so here, and light up their switches.
+        const off  = this._lifeSupportOff();
+        const note = document.getElementById('life-support-note');
+        if (note) {
+            note.style.display = off.length ? '' : 'none';
+            note.textContent = off.length
+                ? `No fresh air: switch on the ${off.map(k => (k === 'o2' ? 'O₂ generator' : 'CO₂ scrubber')).join(' and ')}${this.inBreathableAtmosphere && !this.logistics.isFlying() ? ', or open the vents' : ''}`
+                : '';
+        }
+        ['o2', 'co2'].forEach(k => document.getElementById(`${k}-toggle`)?.classList.toggle('needs-attention', off.includes(k)));
     }
 
     // ── Crew UI ─────────────────────────────────────────────────────────────
@@ -2214,7 +2342,9 @@ class StarshipGame {
             `Crew ${number}${others}: “I'm rostered ${hours} hours a day and there's nothing for me to do.”`;
         if (noteEl.style.display === 'none') {
             noteEl.style.display = '';
-            Anchor.attach(noteEl, '#crew-stat'); // floats under the Crew counter, wherever it is
+            // Points at the Crew counter but hangs below the whole header, so it never
+            // covers the speed buttons or the header's other controls.
+            Anchor.attach(noteEl, '#crew-stat', { below: '.game-header' });
         }
     }
 
@@ -2553,7 +2683,7 @@ class StarshipGame {
                 meta    = `${box.fillL.toFixed(1)} L of compost &middot; sells for ${fab.salePrice(box)} credits on a planet`;
                 fillPct = 100;
                 blocker = fab.sellBlocker(box.id);
-                actions = btn('sell', this._sellLabel(fab.salePrice(box)), blocker) + btn('emptyBox', 'Tip Out', null);
+                actions = btn('sell', this._compostSellLabel(box), blocker) + btn('emptyBox', 'Tip Out', null);
                 break;
         }
 
@@ -2604,8 +2734,14 @@ class StarshipGame {
             const swapBlocker = fab.swapBlocker(box.id);
             const sellBlocker = fab.sellModuleBlocker(box.id);
             blocker = sellBlocker && swapBlocker ? swapBlocker : null;
-            actions = repairBtn + btn('swap', swapLabel, swapBlocker) +
-                      btn('sellModule', this._sellLabel(fab.moduleSaleValue(mod)), sellBlocker);
+            actions = repairBtn + (mod.destroyed ? '' : btn('swap', swapLabel, swapBlocker)) +
+                      btn('sellModule', this._sellLabel(fab.moduleSaleValue(mod)), sellBlocker) +
+                      (mod.destroyed && !fab.breakDownTask(unit) ? btn('breakDown', `Break Down for Parts (${this._fmtRepairHours(fab.breakDownSpec(mod.moduleKey).hours)})`, fab.breakDownBlocker(unit)) : '');
+            if (mod.destroyed) {
+                const job = fab.breakDownTask(unit);
+                meta += job ? ` &middot; being broken down: ${job.hoursRemaining.toFixed(1)}h of work left`
+                            : ` &middot; or break it down in the Work Queue for whatever parts are still good`;
+            }
         }
 
         return `
@@ -2624,6 +2760,17 @@ class StarshipGame {
     // From the yard a sale goes by drone and is paid for when it lands at the port.
     _sellLabel(price) {
         return this.logistics.tradeMode() === 'drone' ? `Send by Drone &middot; ~${price} cr` : `Sell &middot; ${price} cr`;
+    }
+
+    // By drone, a compost sale only takes what one run can carry.
+    _compostSellLabel(box) {
+        const fab = this.fabrication;
+        if (this.logistics.tradeMode() !== 'drone') return this._sellLabel(fab.salePrice(box));
+        const litres = this.logistics.compostLitresPerRun(box);
+        const price  = Math.round(litres * fab.COMPOST_PRICE_PER_L);
+        return litres < box.fillL - 0.05
+            ? `Send ${litres.toFixed(0)} of ${box.fillL.toFixed(0)} L by Drone &middot; ~${price} cr`
+            : this._sellLabel(price);
     }
 
     _selectCommsLocation(id) {
@@ -2812,7 +2959,8 @@ class StarshipGame {
                 <li class="market-card" data-supply-key="drone">
                     <div class="market-info">
                         <div class="market-name">${lg.DRONE_NAME}</div>
-                        <div class="market-meta">Carries ${lg.droneSpec('payloadKg')} kg at ${lg.droneSpec('speedKmh')} km/h. Flies itself to you, charged. Owned: ${lg.drones().length}</div>
+                        <div class="market-meta">Carries ${lg.droneSpec('payloadKg')} kg at ${lg.droneSpec('speedKmh')} km/h. Flies itself to you on a small disposable
+                            battery pack, so it arrives with its own battery fully charged. Owned: ${lg.drones().length}</div>
                         ${droneBlocker ? `<div class="market-blocker">${droneBlocker}</div>` : ''}
                     </div>
                     <button class="repair-btn" data-logi-action="buyDrone" ${droneBlocker ? 'disabled' : ''}>Buy &middot; ${lg.DRONE_PRICE} cr</button>
@@ -2866,7 +3014,7 @@ class StarshipGame {
                         <div class="market-meta">${box.fillL.toFixed(1)} L</div>
                         ${blocker ? `<div class="market-blocker">${blocker}</div>` : ''}
                     </div>
-                    <button class="repair-btn" data-fab-action="sell" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>${this._sellLabel(fab.salePrice(box))}</button>
+                    <button class="repair-btn" data-fab-action="sell" data-box-id="${box.id}" ${blocker ? 'disabled' : ''}>${this._compostSellLabel(box)}</button>
                 </li>`;
             }).join('');
 
@@ -2937,8 +3085,9 @@ class StarshipGame {
         fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
         fill.className    = 'repair-fill ' + this._repairZoneClass(pct, sys.destroyed);
 
-        document.getElementById(`${idPrefix}-repair-pct`).textContent =
-            sys.destroyed ? 'DESTROYED' : `Repair: ${pct.toFixed(0)}%` + (sys.juryRigged ? ' (jury-rigged)' : '');
+        const notFitted = sys.installed === false;
+        document.getElementById(`${idPrefix}-repair-pct`).textContent = notFitted ? 'NOT FITTED'
+            : sys.destroyed ? 'DESTROYED' : `Repair: ${pct.toFixed(0)}%` + (sys.juryRigged ? ' (jury-rigged)' : '');
 
         const task     = this.repairQueue.find(t => t.systemKey === systemKey);
         const btn       = document.getElementById(`${idPrefix}-repair-btn`);
@@ -2954,10 +3103,26 @@ class StarshipGame {
         }
         targetsEl.style.display = 'none';
 
-        if (sys.destroyed) {
+        if (notFitted) {
             btn.style.display      = 'none';
             statusEl.style.display = '';
-            statusEl.textContent   = 'Awaiting replacement part';
+            statusEl.textContent   = 'Empty slot — buy a replacement on the market';
+        } else if (sys.destroyed) {
+            btn.style.display      = 'none';
+            statusEl.style.display = '';
+            // The wreck can be taken apart where it sits, in the Work Queue.
+            const job = this.fabrication.breakDownTask(systemKey);
+            statusEl.textContent   = job
+                ? `Being broken down: ${job.hoursRemaining.toFixed(1)}h of work left (${job.status === 'in-progress' ? 'in progress' : 'queued'})`
+                : 'Awaiting replacement part';
+            if (!job) {
+                const blocker = this.fabrication.breakDownBlocker(systemKey);
+                const hours   = this._fmtRepairHours(this.fabrication.breakDownSpec(systemKey).hours);
+                const html = `<button class="repair-btn" data-fab-action="breakDown" data-key="${systemKey}"${blocker ? ` disabled title="${this._escapeHtml(blocker)}"` : ' title="Engineers take the wreck apart in the Work Queue; whatever parts are still good go into a storage box"'}>Break Down for Parts (${hours})</button>` +
+                    (blocker ? `<div class="market-blocker">${this._escapeHtml(blocker)}</div>` : '');
+                if (targetsEl.dataset.html !== html) { targetsEl.innerHTML = html; targetsEl.dataset.html = html; }
+                targetsEl.style.display = '';
+            }
         } else if (task) {
             btn.style.display      = 'none';
             statusEl.style.display = '';
@@ -3090,14 +3255,16 @@ class StarshipGame {
 
     _fabricationTaskHtml(task) {
         const strip  = task.kind === 'strip';
-        const recipe = strip ? { name: this.logistics.DRIVE_NAMES[task.recipeKey] } : this.fabrication.RECIPES[task.recipeKey];
+        const breakDown = this.fabrication.isBreakDownTask(task);
+        const recipe = breakDown ? { name: this.fabrication.breakDownLabel(task.recipeKey) }
+            : strip ? { name: this.logistics.DRIVE_NAMES[task.recipeKey] } : this.fabrication.RECIPES[task.recipeKey];
         const progressPct = task.totalHours > 0
             ? Math.max(0, Math.min(100, 100 * (1 - task.hoursRemaining / task.totalHours))) : 100;
         return `
             <li class="task-card task-card-fabricate" draggable="true" data-task-id="${task.id}">
                 <span class="task-drag-handle">&#10495;</span>
                 <div class="task-info">
-                    <div class="task-title">${strip ? 'Strip for Parts' : 'Fabricate'} &mdash; ${recipe ? recipe.name : task.recipeKey}</div>
+                    <div class="task-title">${breakDown ? 'Break Down for Parts' : strip ? 'Strip for Parts' : 'Fabricate'} &mdash; ${recipe ? recipe.name : task.recipeKey}</div>
                     <div class="task-progress-track"><div class="task-progress-fill" style="width:${progressPct.toFixed(1)}%"></div></div>
                     <div class="task-meta">${task.status === 'in-progress' ? 'In progress' : 'Queued'} &middot; ${task.hoursRemaining.toFixed(1)}h / ${this._fmtRepairHours(task.totalHours)} &middot; ${strip ? 'cancelling leaves it as it is' : 'cancelling returns its components'}</div>
                 </div>

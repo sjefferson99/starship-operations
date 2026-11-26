@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Starship Operations</title>
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body data-bg="space">
@@ -12,7 +13,6 @@
         <div class="launch-menu">
             <button id="new-game-btn">New Game</button>
             <button id="load-game-btn">Load Game</button>
-            <button id="quit-btn">Quit Game</button>
         </div>
     </div>
 
@@ -88,9 +88,14 @@
                         <button class="speed-btn" id="speed-10x">10&times;</button>
                         <button class="speed-btn" id="speed-100x">100&times;</button>
                         <button class="speed-btn" id="speed-1000x">1000&times;</button>
+                        <button class="speed-btn" id="speed-10000x">10000&times;</button>
+                        <label class="slow-on-news" title="Drop back to 1× whenever something new is listed in Notifications">
+                            <input type="checkbox" id="slow-on-news-toggle"> 1&times; on notification
+                        </label>
                     </div>
-                    <!-- Comms & Nav is opened from the Transceiver card, not from here. -->
+                    <!-- Comms & Nav opens from here and from the Transceiver card. -->
                     <div class="header-actions" id="header-actions">
+                        <button id="comms-nav-header-btn" class="repair-queue-btn">Comms &amp; Nav</button>
                         <button id="repair-queue-btn" class="repair-queue-btn">Work Queue</button>
                         <button id="cargo-btn" class="repair-queue-btn">Cargo Hold</button>
                         <button id="ship-capacity-btn" class="repair-queue-btn">Ship Capacity</button>
@@ -746,6 +751,7 @@
                         <span class="env-label" id="vent-status-label">Vents: CLOSED</span>
                         <button id="vent-toggle" class="toggle-btn btn-off">Open Vents</button>
                     </div>
+                    <div class="life-support-note" id="life-support-note" style="display:none"></div>
                 </div>
         </main>
 
@@ -774,6 +780,28 @@
                 <button id="export-btn">Export Save File</button>
                 <button id="main-menu-btn">Main Menu</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Leaving for the main menu with play since the last save (main.js returnToMainMenu) -->
+    <div id="quit-confirm" class="pause-menu quit-confirm" style="display: none;" role="dialog" aria-labelledby="quit-confirm-title">
+        <div class="pause-card">
+            <h2 id="quit-confirm-title">Return to Main Menu</h2>
+            <p class="quit-confirm-text">Save before you go? Anything since your last save will be lost otherwise.</p>
+            <div class="pause-options">
+                <button id="quit-save-btn">Save &amp; Quit</button>
+                <button id="quit-discard-btn">Quit Without Saving</button>
+                <button id="quit-cancel-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Story pages met along the way (main.js _showStory), content from data/story_messages.json -->
+    <div id="story-modal" class="intro-overlay story-overlay" style="display:none;" role="dialog">
+        <div class="intro-content">
+            <div class="intro-header" id="story-header"></div>
+            <div class="intro-body" id="story-body"></div>
+            <button id="story-continue-btn" class="intro-continue">CONTINUE &rarr;</button>
         </div>
     </div>
 

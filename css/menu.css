@@ -245,3 +245,17 @@
 }
 .pause-options { display: flex; flex-direction: column; gap: 14px; }
 .pause-options button { width: 200px; }
+
+/* Leaving for the main menu: opens on top of the pause menu. */
+.quit-confirm { z-index: 1100; }
+.quit-confirm .pause-options { align-items: center; }
+.quit-confirm-text {
+    max-width: 300px;
+    margin: -12px auto 24px;
+    color: #b0bec5;
+    font-size: 0.92rem;
+    line-height: 1.5;
+}
+
+/* A story page met in play sits over the dashboard and its header. */
+.story-overlay { z-index: 1050; background: rgba(4, 8, 24, 0.7); }
